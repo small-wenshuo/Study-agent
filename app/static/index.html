@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Study Agent</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#667085; --line:#d8dee8; --accent:#3157d5; --paper:#fff; --wash:#f4f6fb; }
+    * { box-sizing:border-box } body { margin:0; font:16px/1.62 system-ui,sans-serif; color:var(--ink); background:var(--wash) }
+    main { width:min(900px,100%); min-height:100vh; margin:auto; background:var(--paper); display:grid; grid-template-rows:auto 1fr auto }
+    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center }
+    h1 { margin:0; font-size:20px } button { border:1px solid var(--line); background:white; border-radius:9px; padding:9px 13px; cursor:pointer }
+    #messages { padding:28px 24px; overflow:auto } .empty { color:var(--muted); text-align:center; margin-top:15vh }
+    .msg { max-width:82%; margin:0 0 20px; padding:13px 16px; border-radius:14px; white-space:pre-wrap; overflow-wrap:anywhere }
+    .user { margin-left:auto; background:#e9efff } .assistant { background:#f5f6f8 } .assistant a { color:var(--accent) }
+    .status { color:var(--muted); font-size:14px; padding:0 5px 12px } pre { overflow:auto; background:#202632; color:#f4f6fb; padding:12px; border-radius:8px }
+    form { border-top:1px solid var(--line); padding:16px 24px; display:flex; gap:10px } textarea { flex:1; min-height:52px; max-height:160px; resize:vertical; border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit }
+    form button { color:white; background:var(--accent); border-color:var(--accent) } button:disabled, textarea:disabled { opacity:.55 }
+    @media(max-width:600px){ .msg{max-width:95%} header,#messages,form{padding-left:14px;padding-right:14px} }
+  </style>
+</head>
+<body><main>
+  <header><h1>Study Agent</h1><button id="new">新建会话</button></header>
+  <section id="messages"><div class="empty">问一个计算机问题。需要资料时，我会先搜索并阅读正文。</div></section>
+  <form id="form"><textarea id="input" required maxlength="12000" placeholder="例如：解释 Python 装饰器，并给出官方文档"></textarea><button id="send">发送</button></form>
+</main><script>
+  const messages = document.querySelector('#messages'), input = document.querySelector('#input'), send = document.querySelector('#send');
+  let sessionId = null;
+  function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  function render(text){
+    let safe=escapeHtml(text);
+    safe=safe.replace(/```([\s\S]*?)```/g,(_,code)=>`<pre><code>${code.trim()}</code></pre>`);
+    safe=safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,(_,label,url)=>{
+      const attributeUrl=url.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+      return `<a href="${attributeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
+    return safe.replace(/\n/g,'<br>');
+  }
+  function add(role,text){ document.querySelector('.empty')?.remove(); const el=document.createElement('article'); el.className=`msg ${role}`; el.innerHTML=render(text); messages.append(el); messages.scrollTop=messages.scrollHeight; return el; }
+  async function newSession(){ const r=await fetch('/api/sessions',{method:'POST'}); sessionId=(await r.json()).session_id; messages.innerHTML='<div class="empty">新会话已就绪。</div>'; }
+  async function submit(event){
+    event.preventDefault(); const question=input.value.trim(); if(!question)return; if(!sessionId)await newSession();
+    add('user',question); input.value=''; input.disabled=send.disabled=true; const status=document.createElement('div'); status.className='status'; messages.append(status);
+    try{
+      const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,message:question})});
+      if(!response.ok){ const data=await response.json(); throw new Error(data.detail||'请求失败'); }
+      const reader=response.body.getReader(), decoder=new TextDecoder(); let buffer='';
+      while(true){ const {value,done}=await reader.read(); if(done)break; buffer+=decoder.decode(value,{stream:true}); const blocks=buffer.split('\n\n'); buffer=blocks.pop();
+        for(const block of blocks){ const eventName=block.match(/^event: (.+)$/m)?.[1], raw=block.match(/^data: (.+)$/m)?.[1]; if(!raw)continue; const data=JSON.parse(raw);
+          if(eventName==='status')status.textContent=data.message; if(eventName==='answer')add('assistant',data.answer); if(eventName==='error')add('assistant',`出错了：${data.message}`);
+        }
+      }
+    }catch(error){ add('assistant',`请求失败：${error.message}`); } finally { status.remove(); input.disabled=send.disabled=false; input.focus(); }
+  }
+  document.querySelector('#form').addEventListener('submit',submit); document.querySelector('#new').addEventListener('click',newSession); input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.querySelector('#form').requestSubmit()}}); newSession();
+</script></body></html>

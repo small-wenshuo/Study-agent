@@ -1,0 +1,22 @@
+[
+  {"id": "basic-01", "question": "用例子解释时间复杂度 O(n log n)", "expect_search": false, "topic": "algorithm"},
+  {"id": "basic-02", "question": "二分查找为什么要求数据有序？", "expect_search": false, "topic": "algorithm"},
+  {"id": "basic-03", "question": "进程和线程有什么区别？", "expect_search": false, "topic": "operating-system"},
+  {"id": "basic-04", "question": "TCP 三次握手解决了什么问题？", "expect_search": false, "topic": "network"},
+  {"id": "basic-05", "question": "数据库索引为什么能加速查询？", "expect_search": false, "topic": "database"},
+  {"id": "basic-06", "question": "解释 Python 闭包，并给一个最小例子", "expect_search": false, "topic": "programming"},
+  {"id": "basic-07", "question": "递归和迭代各适合什么场景？", "expect_search": false, "topic": "algorithm"},
+  {"id": "basic-08", "question": "HTTP GET 和 POST 的语义区别是什么？", "expect_search": false, "topic": "network"},
+  {"id": "basic-09", "question": "什么是数据库事务的 ACID？", "expect_search": false, "topic": "database"},
+  {"id": "basic-10", "question": "虚拟内存是如何工作的？", "expect_search": false, "topic": "operating-system"},
+  {"id": "source-01", "question": "解释 Python 装饰器，并引用 Python 官方文档", "expect_search": true, "topic": "programming"},
+  {"id": "source-02", "question": "查阅 MDN，说明 fetch 遇到 HTTP 404 时 Promise 是否会 reject", "expect_search": true, "topic": "web"},
+  {"id": "source-03", "question": "根据 PostgreSQL 官方文档解释 MVCC", "expect_search": true, "topic": "database"},
+  {"id": "source-04", "question": "引用 RFC 说明 HTTP 语义中的幂等性", "expect_search": true, "topic": "network"},
+  {"id": "source-05", "question": "从 Linux 内核文档找资料解释 CFS 调度器", "expect_search": true, "topic": "operating-system"},
+  {"id": "source-06", "question": "当前 Python 稳定版中 asyncio.TaskGroup 的官方用法是什么？", "expect_search": true, "topic": "programming"},
+  {"id": "source-07", "question": "查一下当前 Node.js LTS 版本，并给官方来源", "expect_search": true, "topic": "programming"},
+  {"id": "source-08", "question": "根据 SQLite 官方文档说明 WAL 模式的优缺点", "expect_search": true, "topic": "database"},
+  {"id": "source-09", "question": "引用 Kubernetes 官方文档解释 readiness probe", "expect_search": true, "topic": "systems"},
+  {"id": "source-10", "question": "查阅 Git 官方文档解释 rebase --onto 的三个参数", "expect_search": true, "topic": "tools"}
+]
