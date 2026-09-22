@@ -2,7 +2,7 @@
 
 一款帮助学习的agent
 
-面向计算机学习者的学习辅助 Agent，计划实现“提问 → 判断 → 搜索 → 阅读正文 → 整理证据 → 回答并引用”的流程。
+面向计算机学习者的学习辅助 Agent，实现“提问 → 判断 → 搜索 → 阅读正文 → 整理证据 → 回答并引用”的流程。
 
 ## 当前状态
 
@@ -16,7 +16,8 @@ V1 Demo 已实现：模型可直接回答或自主调用 `search_web` / `read_pa
 约定使用 Python 3.11，当前本机解释器为 `D:/codex/.env/new_agent/python.exe`。
 
 ```powershell
-Copy-Item .env.example .env
+# 仅首次配置时创建，避免覆盖已经填写的本地密钥
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # 编辑 .env，至少填写 MODEL_NAME、MODEL_BASE_URL、MODEL_API_KEY
 # 如需联网，再填写 TAVILY_API_KEY
 
@@ -34,7 +35,7 @@ D:/codex/.env/new_agent/python.exe -m uvicorn app.main:app --reload
 D:/codex/.env/new_agent/python.exe -m unittest discover -v
 ```
 
-自动测试使用明确的 `FakeModel` / `FakeSearch`，不访问外部服务。配置真实凭据后还应人工验证：
+自动测试使用明确的模型与搜索 adapter，不访问外部服务，并覆盖两个工具的公开 interface。配置真实凭据后还应人工验证：
 
 1. 普通知识题不触发搜索。
 2. “解释 Python 装饰器并提供官方资料”实际发生搜索和正文读取，回答含可打开的 `[S*]` 链接。
@@ -47,7 +48,7 @@ D:/codex/.env/new_agent/python.exe -m unittest discover -v
 
 ```text
 app/agent/       LangGraph 状态、提示词与工具循环
-app/tools/       search_web 与 read_pages 工具定义及执行
+app/tools/       工具 interface、Schema、search_web 与 read_pages 实现
 app/providers/   模型与 Tavily 适配器
 app/services/    引用和内存会话
 app/static/      零构建网页 Demo
