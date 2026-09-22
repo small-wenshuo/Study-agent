@@ -46,6 +46,7 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         """搜索工具应暴露正确 Schema 并登记去重后的 R 编号。"""
         tool = SearchWebTool(self.provider, max_rounds=2, timeout=1, emit_status=ignore_status)
         result = await tool.execute({"query": " docs "}, self.context)
+        self.context.read_calls = 1
         duplicate = await tool.execute({"query": "docs again"}, self.context)
 
         self.assertEqual(SEARCH_WEB_SCHEMA["function"]["name"], "search_web")
@@ -62,6 +63,20 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(invalid["error_type"], "invalid_arguments")
         self.assertEqual(exhausted["error_type"], "budget_exhausted")
+        self.assertEqual(self.provider.search_calls, [])
+
+    async def test_search_requires_reading_existing_candidates_first(self):
+        """已有候选结果但没有正文时，应先阅读而不是连续搜索。"""
+        self.context.search_results["R1"] = {
+            "result_id": "R1",
+            "title": "Docs",
+            "url": "https://example.com/docs",
+            "snippet": "summary",
+        }
+        tool = SearchWebTool(self.provider, max_rounds=3, timeout=1, emit_status=ignore_status)
+        result = await tool.execute({"query": "another query"}, self.context)
+
+        self.assertEqual(result["error_type"], "read_required")
         self.assertEqual(self.provider.search_calls, [])
 
     async def test_reader_rejects_unknown_result(self):

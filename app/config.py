@@ -34,6 +34,8 @@ class Settings:
     search_provider: str
     tavily_api_key: str
     task_timeout_seconds: int = 180
+    model_timeout_seconds: int = 60
+    model_max_retries: int = 1
     tool_timeout_seconds: int = 30
     max_search_rounds: int = 3
     max_tool_calls: int = 12
@@ -49,6 +51,8 @@ class Settings:
             search_provider=os.getenv("SEARCH_PROVIDER", "tavily"),
             tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
             task_timeout_seconds=_integer("TASK_TIMEOUT_SECONDS", 180, 1),
+            model_timeout_seconds=_integer("MODEL_TIMEOUT_SECONDS", 60, 1),
+            model_max_retries=_integer("MODEL_MAX_RETRIES", 1, 0),
             tool_timeout_seconds=_integer("TOOL_TIMEOUT_SECONDS", 30, 1),
             max_search_rounds=_integer("MAX_SEARCH_ROUNDS", 3, 0),
             max_tool_calls=_integer("MAX_TOOL_CALLS", 12, 1),

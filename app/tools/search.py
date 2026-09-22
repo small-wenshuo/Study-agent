@@ -52,6 +52,13 @@ class SearchWebTool:
             return {"ok": False, "error_type": "budget_exhausted", "message": "搜索轮次已耗尽"}
         if self._provider is None:
             return {"ok": False, "error_type": "search_unavailable", "message": "搜索服务未配置"}
+        if context.search_results and context.read_calls == 0:
+            return {
+                "ok": False,
+                "error_type": "read_required",
+                "message": "已有候选搜索结果，请先调用 read_pages 阅读正文，再决定是否补充搜索",
+                "result_ids": list(context.search_results),
+            }
 
         query = query.strip()
         await self._emit_status("status", f"正在搜索：{query}")

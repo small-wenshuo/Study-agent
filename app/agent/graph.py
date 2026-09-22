@@ -43,6 +43,8 @@ class StudyAgent:
         max_search_rounds: int = 3,
         max_tool_calls: int = 12,
         task_timeout: int = 180,
+        model_timeout: int = 60,
+        model_max_retries: int = 1,
         tool_timeout: int = 30,
     ) -> None:
         """注入外部服务并设置每次任务的执行预算。"""
@@ -50,9 +52,10 @@ class StudyAgent:
         self.search_provider = search_provider
         self.max_tool_calls = max_tool_calls
         self.task_timeout = task_timeout
+        self.model_timeout = model_timeout
+        self.model_max_retries = model_max_retries
         self.tool_timeout = tool_timeout
-        # A single agent instance serves many sessions. ContextVar keeps progress
-        # callbacks task-local when two sessions run concurrently.
+        # 单个 Agent 会服务多个会话；ContextVar 保证并发任务的进度回调互不串线。
         self._progress: ContextVar[ProgressCallback | None] = ContextVar("progress", default=None)
         tools: list[AgentTool] = [
             SearchWebTool(
@@ -104,10 +107,38 @@ class StudyAgent:
             system_prompt += f"\n\n{REPAIR_PROMPT}\n校验错误：{state['citation_error']}"
         messages: list[BaseMessage] = [SystemMessage(content=system_prompt), *state["messages"]]
         await self._emit("status", "正在组织回答…")
-        response = await asyncio.wait_for(
-            self.model.ainvoke(messages, tools_enabled), timeout=self.tool_timeout
+        for attempt in range(self.model_max_retries + 1):
+            try:
+                response = await asyncio.wait_for(
+                    self.model.ainvoke(messages, tools_enabled), timeout=self.model_timeout
+                )
+                return {"messages": [response], "agent_steps": state["agent_steps"] + 1}
+            except TimeoutError:
+                logger.warning(
+                    "model_call_timeout task_id=%s attempt=%d max_attempts=%d",
+                    state["task_id"],
+                    attempt + 1,
+                    self.model_max_retries + 1,
+                )
+                if attempt < self.model_max_retries:
+                    await self._emit("status", "模型响应超时，正在重试…")
+
+        return {
+            "messages": [AIMessage(content=self._model_timeout_answer(state))],
+            "agent_steps": state["agent_steps"] + 1,
+            "disable_tools": True,
+            "errors": [*state["errors"], "模型响应超时，重试次数已耗尽"],
+        }
+
+    @staticmethod
+    def _model_timeout_answer(state: AgentState) -> str:
+        """在模型持续超时时保留已读来源并返回明确降级说明。"""
+        if not state["sources"]:
+            return "模型响应超时，有限重试后仍未生成回答。请稍后重试。"
+        source_refs = "\n".join(
+            f"- [{source_id}] {source['title']}" for source_id, source in state["sources"].items()
         )
-        return {"messages": [response], "agent_steps": state["agent_steps"] + 1}
+        return f"模型响应超时，未能完成可靠讲解。已经读取的来源仍保留如下，可先行核对：\n{source_refs}"
 
     @staticmethod
     def _after_agent(state: AgentState) -> str:
@@ -121,7 +152,7 @@ class StudyAgent:
         assert isinstance(message, AIMessage)
         results = dict(state["search_results"])
         sources = dict(state["sources"])
-        context = ToolContext(results, sources, state["search_rounds"])
+        context = ToolContext(results, sources, state["search_rounds"], state["read_calls"])
         errors = list(state["errors"])
         calls = state["tool_calls"]
         tool_messages: list[ToolMessage] = []
@@ -148,6 +179,7 @@ class StudyAgent:
             "search_results": results,
             "sources": sources,
             "search_rounds": context.search_rounds,
+            "read_calls": context.read_calls,
             "tool_calls": calls,
             "errors": errors,
         }
@@ -206,6 +238,7 @@ class StudyAgent:
             "search_results": {},
             "sources": {},
             "search_rounds": 0,
+            "read_calls": 0,
             "tool_calls": 0,
             "agent_steps": 0,
             "errors": [],

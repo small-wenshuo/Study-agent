@@ -26,7 +26,9 @@ class OpenAICompatibleModel:
             model=settings.model_name,
             api_key=settings.model_api_key,
             base_url=settings.model_base_url,
-            timeout=settings.tool_timeout_seconds,
+            # 重试和超时分类由 Agent 图统一管理；HTTP 客户端稍宽一些，
+            # 避免底层异常与图的单次模型超时竞争。
+            timeout=settings.model_timeout_seconds + 5,
             max_retries=0,
             temperature=0.2,
         )

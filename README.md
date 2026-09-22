@@ -29,6 +29,8 @@ D:/codex/.env/new_agent/python.exe -m uvicorn app.main:app --reload
 
 同一兼容协议的模型服务通常只需换 `.env`；首版只正式支持具备 Tool Calling 的 OpenAI-compatible Chat Completions 接口。未配置 Tavily 时仍可基础问答，但要求来源的问题应明确说明联网不可用。
 
+默认运行限制为：任务总时限 180 秒、单次模型调用 60 秒且超时重试 1 次、单次网页工具调用 30 秒。可通过 `.env` 中的 `TASK_TIMEOUT_SECONDS`、`MODEL_TIMEOUT_SECONDS`、`MODEL_MAX_RETRIES` 和 `TOOL_TIMEOUT_SECONDS` 调整。
+
 ## 测试
 
 ```powershell
@@ -42,7 +44,7 @@ D:/codex/.env/new_agent/python.exe -m unittest discover -v
 3. 搜索失败、正文失败和连续工具调用最终都会结束并说明局限。
 4. 连续追问保留上下文，新建会话不继承旧上下文。
 
-首批 20 道评测题在 `evals/questions.json`。真实模型与 Tavily 调用尚未在无凭据环境中验收，不能由离线测试替代。
+首批 20 道评测题在 `evals/questions.json`。2026-09-22 使用真实模型和 Tavily 回归通过 20/20；判定方法、修复前后结果和剩余性能问题见 [真实评测报告](.scratch/study-agent-v1/evaluation-2026-09-22.md)。该结果验证工具链，不替代独立的事实正确性与引用支持度评分。
 
 ## 结构
 

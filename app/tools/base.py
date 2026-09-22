@@ -11,6 +11,7 @@ class ToolContext:
     search_results: dict[str, dict[str, str]]
     sources: dict[str, dict[str, Any]]
     search_rounds: int
+    read_calls: int = 0
 
 
 class AgentTool(Protocol):

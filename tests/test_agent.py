@@ -56,6 +56,39 @@ class SlowModel:
         return AIMessage(content="too late")
 
 
+class SlowThenFastModel:
+    """第一次超时、第二次成功，用来验证有限重试。"""
+
+    def __init__(self):
+        """初始化调用计数。"""
+        self.calls = 0
+
+    async def ainvoke(self, messages, tools_enabled):
+        """首次延迟，重试时立即返回回答。"""
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.sleep(1)
+        return AIMessage(content="重试后成功回答。")
+
+
+class SearchReadThenSlowModel:
+    """先完成搜索和阅读调用，再持续超时。"""
+
+    def __init__(self):
+        """准备搜索与阅读两条工具消息。"""
+        self.responses = [
+            tool_call("search_web", {"query": "official docs"}, "c1"),
+            tool_call("read_pages", {"result_ids": ["R1"]}, "c2"),
+        ]
+
+    async def ainvoke(self, messages, tools_enabled):
+        """先返回预设工具调用，之后模拟模型持续无响应。"""
+        if self.responses:
+            return self.responses.pop(0)
+        await asyncio.sleep(1)
+        return AIMessage(content="too late")
+
+
 def tool_call(name, args, call_id):
     """构造 LangChain 使用的标准工具调用消息。"""
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}])
@@ -132,9 +165,39 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_total_timeout_returns_clear_answer(self):
         """超过任务总时限时应返回明确的停止说明。"""
-        agent = StudyAgent(SlowModel(), None, task_timeout=0.01, tool_timeout=2)
+        agent = StudyAgent(SlowModel(), None, task_timeout=0.01, model_timeout=2)
         answer = await agent.run([], "问题")
         self.assertIn("超过总时限", answer)
+
+    async def test_model_timeout_is_retried_once(self):
+        """单次模型超时应重试一次，而不是终止整个任务。"""
+        model = SlowThenFastModel()
+        agent = StudyAgent(model, None, task_timeout=1, model_timeout=0.01, model_max_retries=1)
+        answer = await agent.run([], "问题")
+        self.assertEqual(answer, "重试后成功回答。")
+        self.assertEqual(model.calls, 2)
+
+    async def test_model_timeout_is_not_reported_as_total_timeout(self):
+        """模型重试耗尽应报告单次调用超时，而非任务总超时。"""
+        agent = StudyAgent(SlowModel(), None, task_timeout=1, model_timeout=0.01, model_max_retries=0)
+        answer = await agent.run([], "问题")
+        self.assertIn("模型响应超时", answer)
+        self.assertNotIn("超过总时限", answer)
+
+    async def test_model_timeout_preserves_read_sources(self):
+        """最终生成超时时应返回已读来源，而不是丢弃证据。"""
+        agent = StudyAgent(
+            SearchReadThenSlowModel(),
+            FakeSearch(),
+            task_timeout=1,
+            model_timeout=0.01,
+            model_max_retries=0,
+            tool_timeout=1,
+        )
+        answer = await agent.run([], "查文档并给来源")
+        self.assertIn("模型响应超时", answer)
+        self.assertIn("[S1]", answer)
+        self.assertIn("https://docs.python.org", answer)
 
 
 if __name__ == "__main__":

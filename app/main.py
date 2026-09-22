@@ -35,6 +35,8 @@ def build_agent() -> StudyAgent | None:
         max_search_rounds=settings.max_search_rounds,
         max_tool_calls=settings.max_tool_calls,
         task_timeout=settings.task_timeout_seconds,
+        model_timeout=settings.model_timeout_seconds,
+        model_max_retries=settings.model_max_retries,
         tool_timeout=settings.tool_timeout_seconds,
     )
 

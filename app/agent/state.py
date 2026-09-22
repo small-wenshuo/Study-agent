@@ -14,6 +14,7 @@ class AgentState(TypedDict):
     search_results: dict[str, dict[str, str]]
     sources: dict[str, dict[str, Any]]
     search_rounds: int
+    read_calls: int
     tool_calls: int
     agent_steps: int
     errors: list[str]

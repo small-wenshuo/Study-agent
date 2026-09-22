@@ -66,6 +66,7 @@ class ReadPagesTool:
             return {"ok": False, "error_type": "search_unavailable", "message": "阅读服务未配置"}
 
         await self._emit_status("status", f"正在阅读 {len(result_ids)} 个页面…")
+        context.read_calls += 1
         urls = [context.search_results[value]["url"] for value in result_ids]
         try:
             extracted = await asyncio.wait_for(self._provider.extract(urls), timeout=self._timeout)
