@@ -47,6 +47,7 @@ D:/codex/.env/new_agent/python.exe -m unittest discover -v
 
 ```text
 app/agent/       LangGraph 状态、提示词与工具循环
+app/tools/       search_web 与 read_pages 工具定义及执行
 app/providers/   模型与 Tavily 适配器
 app/services/    引用和内存会话
 app/static/      零构建网页 Demo

@@ -6,7 +6,8 @@ V1 是面向计算机学习者的本地网页 Agent，完成“提问 → 模型
 
 ## 当前实现
 
-- `app/agent/graph.py`：LangGraph 决策循环。模型决定是否调用工具；程序执行工具、限制搜索/调用次数并校验引用。
+- `app/agent/graph.py`：LangGraph 决策循环。模型决定是否调用工具；图只负责预算和工具调度。
+- `app/tools/search.py`、`reader.py`：两个工具的 Schema、参数校验、执行、结果/来源编号与结构化错误。
 - `app/providers/model.py`：OpenAI-compatible Tool Calling 适配器。
 - `app/providers/tavily.py`：Tavily Search/Extract、一次有限重试和公开 URL 校验。
 - `app/services/sessions.py`：内存会话、最近 6 轮消息及单会话执行锁。

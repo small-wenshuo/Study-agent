@@ -17,8 +17,9 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.prompts import REPAIR_PROMPT, SYSTEM_PROMPT
 from app.agent.state import AgentState
 from app.providers.model import ModelClient
-from app.providers.tavily import ProviderError, SearchProvider
+from app.providers.tavily import SearchProvider
 from app.services.citations import append_source_links, validate_citations
+from app.tools import AgentTool, ReadPagesTool, SearchWebTool, ToolContext
 
 
 ProgressCallback = Callable[[str, str], Awaitable[None] | None]
@@ -47,13 +48,22 @@ class StudyAgent:
         """注入外部服务并设置每次任务的执行预算。"""
         self.model = model
         self.search_provider = search_provider
-        self.max_search_rounds = max_search_rounds
         self.max_tool_calls = max_tool_calls
         self.task_timeout = task_timeout
         self.tool_timeout = tool_timeout
         # A single agent instance serves many sessions. ContextVar keeps progress
         # callbacks task-local when two sessions run concurrently.
         self._progress: ContextVar[ProgressCallback | None] = ContextVar("progress", default=None)
+        tools: list[AgentTool] = [
+            SearchWebTool(
+                search_provider,
+                max_rounds=max_search_rounds,
+                timeout=tool_timeout,
+                emit_status=self._emit,
+            ),
+            ReadPagesTool(search_provider, timeout=tool_timeout, emit_status=self._emit),
+        ]
+        self.tools = {tool.name: tool for tool in tools}
         self.graph = self._build_graph()
 
     def _build_graph(self):
@@ -111,8 +121,8 @@ class StudyAgent:
         assert isinstance(message, AIMessage)
         results = dict(state["search_results"])
         sources = dict(state["sources"])
+        context = ToolContext(results, sources, state["search_rounds"])
         errors = list(state["errors"])
-        rounds = state["search_rounds"]
         calls = state["tool_calls"]
         tool_messages: list[ToolMessage] = []
 
@@ -123,12 +133,13 @@ class StudyAgent:
             call_id = str(call.get("id", f"call-{calls}"))
             if calls > self.max_tool_calls:
                 payload = {"ok": False, "error_type": "budget_exhausted", "message": "工具调用预算已耗尽"}
-            elif name == "search_web":
-                payload, rounds = await self._search(args, results, rounds)
-            elif name == "read_pages":
-                payload = await self._read(args, results, sources)
             else:
-                payload = {"ok": False, "error_type": "unknown_tool", "message": f"不允许的工具：{name}"}
+                tool = self.tools.get(name)
+                payload = (
+                    await tool.execute(args, context)
+                    if tool
+                    else {"ok": False, "error_type": "unknown_tool", "message": f"不允许的工具：{name}"}
+                )
             if not payload.get("ok"):
                 errors.append(str(payload.get("message", "工具执行失败")))
             tool_messages.append(ToolMessage(content=json.dumps(payload, ensure_ascii=False), tool_call_id=call_id, name=name))
@@ -136,81 +147,10 @@ class StudyAgent:
             "messages": tool_messages,
             "search_results": results,
             "sources": sources,
-            "search_rounds": rounds,
+            "search_rounds": context.search_rounds,
             "tool_calls": calls,
             "errors": errors,
         }
-
-    async def _search(self, args: Any, results: dict[str, dict[str, str]], rounds: int) -> tuple[dict[str, Any], int]:
-        """执行一次受预算限制的搜索，并登记稳定的 R 编号。"""
-        query = args.get("query") if isinstance(args, dict) else None
-        if not isinstance(query, str) or not query.strip() or len(query) > 1000:
-            return {"ok": False, "error_type": "invalid_arguments", "message": "query 必须是 1～1000 字符的字符串"}, rounds
-        if rounds >= self.max_search_rounds:
-            return {"ok": False, "error_type": "budget_exhausted", "message": "搜索轮次已耗尽"}, rounds
-        if self.search_provider is None:
-            return {"ok": False, "error_type": "search_unavailable", "message": "搜索服务未配置"}, rounds
-        await self._emit("status", f"正在搜索：{query.strip()}")
-        try:
-            found = await asyncio.wait_for(self.search_provider.search(query.strip(), 5), timeout=self.tool_timeout)
-        except (ProviderError, TimeoutError, ValueError) as exc:
-            return {"ok": False, "error_type": type(exc).__name__, "message": str(exc)}, rounds + 1
-        registered = []
-        known_urls = {item["url"] for item in results.values()}
-        for item in found:
-            if item["url"] in known_urls:
-                continue
-            result_id = f"R{len(results) + 1}"
-            value = {"result_id": result_id, **item}
-            results[result_id] = value
-            registered.append(value)
-            known_urls.add(item["url"])
-        return {"ok": True, "results": registered, "message": f"找到 {len(registered)} 条新结果"}, rounds + 1
-
-    async def _read(
-        self,
-        args: Any,
-        results: dict[str, dict[str, str]],
-        sources: dict[str, dict[str, Any]],
-    ) -> dict[str, Any]:
-        """读取已登记的搜索结果，并将成功正文登记为 S 来源。"""
-        ids = args.get("result_ids") if isinstance(args, dict) else None
-        if not isinstance(ids, list) or not 1 <= len(ids) <= 3 or any(not isinstance(value, str) for value in ids):
-            return {"ok": False, "error_type": "invalid_arguments", "message": "result_ids 必须包含 1～3 个结果编号"}
-        unknown = [value for value in ids if value not in results]
-        if unknown:
-            return {"ok": False, "error_type": "unknown_result", "message": f"未知结果编号：{', '.join(unknown)}"}
-        if self.search_provider is None:
-            return {"ok": False, "error_type": "search_unavailable", "message": "阅读服务未配置"}
-        await self._emit("status", f"正在阅读 {len(ids)} 个页面…")
-        urls = [results[value]["url"] for value in ids]
-        try:
-            extracted = await asyncio.wait_for(self.search_provider.extract(urls), timeout=self.tool_timeout)
-        except (ProviderError, TimeoutError, ValueError) as exc:
-            return {"ok": False, "error_type": type(exc).__name__, "message": str(exc)}
-        documents = []
-        failures = []
-        for result_id, item in zip(ids, extracted, strict=False):
-            content = str(item.get("content") or "").strip()
-            if not content:
-                failures.append({"result_id": result_id, "reason": str(item.get("error") or "正文为空")})
-                continue
-            existing = next((value for value in sources.values() if value["url"] == results[result_id]["url"]), None)
-            if existing:
-                documents.append(existing)
-                continue
-            source_id = f"S{len(sources) + 1}"
-            truncated = len(content) > 12000
-            source = {
-                "source_id": source_id,
-                "title": results[result_id]["title"],
-                "url": results[result_id]["url"],
-                "content": content[:12000],
-                "truncated": truncated,
-            }
-            sources[source_id] = source
-            documents.append(source)
-        return {"ok": bool(documents), "documents": documents, "failures": failures}
 
     async def _validate_node(self, state: AgentState) -> dict[str, Any]:
         """校验回答中的来源编号，必要时触发一次模型修复。"""

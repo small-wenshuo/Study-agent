@@ -6,44 +6,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import Settings
-
-
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_web",
-            "description": "搜索公开网页。摘要仅用于选择要阅读的页面，不能直接作为回答证据。",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 1000}},
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_pages",
-            "description": "读取本轮搜索结果的网页正文，成功后返回可引用的 S 编号。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "result_ids": {
-                        "type": "array",
-                        "items": {"type": "string", "pattern": "^R[0-9]+$"},
-                        "minItems": 1,
-                        "maxItems": 3,
-                        "uniqueItems": True,
-                    }
-                },
-                "required": ["result_ids"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
+from app.tools import TOOL_SCHEMAS
 
 
 class ModelClient(Protocol):
