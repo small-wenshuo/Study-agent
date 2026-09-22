@@ -7,6 +7,8 @@ from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
+    """描述一次 Agent 任务在 LangGraph 节点间传递的完整状态。"""
+
     task_id: str
     messages: Annotated[list[AnyMessage], add_messages]
     search_results: dict[str, dict[str, str]]

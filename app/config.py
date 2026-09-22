@@ -12,6 +12,7 @@ load_dotenv(ROOT / ".env", override=False)
 
 
 def _integer(name: str, default: int, minimum: int) -> int:
+    """读取并校验一个带下限的整数环境变量。"""
     raw = os.getenv(name, str(default))
     try:
         value = int(raw)
@@ -24,6 +25,8 @@ def _integer(name: str, default: int, minimum: int) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
+    """集中保存模型、搜索服务和执行预算配置。"""
+
     model_provider: str
     model_name: str
     model_base_url: str
@@ -37,6 +40,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        """从环境变量构造配置，未设置项使用安全默认值。"""
         return cls(
             model_provider=os.getenv("MODEL_PROVIDER", "openai_compatible"),
             model_name=os.getenv("MODEL_NAME", ""),
@@ -52,6 +56,7 @@ class Settings:
 
     @property
     def missing_model_fields(self) -> list[str]:
+        """返回尚未填写、会阻止模型启动的配置项名称。"""
         fields = {
             "MODEL_NAME": self.model_name,
             "MODEL_BASE_URL": self.model_base_url,
@@ -61,8 +66,10 @@ class Settings:
 
     @property
     def model_ready(self) -> bool:
+        """判断 OpenAI-compatible 模型配置是否完整。"""
         return self.model_provider == "openai_compatible" and not self.missing_model_fields
 
     @property
     def search_ready(self) -> bool:
+        """判断 Tavily 搜索服务是否已配置。"""
         return self.search_provider == "tavily" and bool(self.tavily_api_key)

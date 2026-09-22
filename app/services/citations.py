@@ -8,6 +8,7 @@ CITATION_RE = re.compile(r"\[S\d+\]")
 
 
 def validate_citations(answer: str, sources: dict[str, dict[str, Any]], requires_sources: bool) -> tuple[bool, str]:
+    """确认回答只引用已读取来源，并在有来源时至少引用一次。"""
     cited = set(CITATION_RE.findall(answer))
     known = {f"[{source_id}]" for source_id in sources}
     unknown = cited - known
@@ -21,6 +22,7 @@ def validate_citations(answer: str, sources: dict[str, dict[str, Any]], requires
 
 
 def append_source_links(answer: str, sources: dict[str, dict[str, Any]]) -> str:
+    """在回答末尾附加实际被引用来源的标题和链接。"""
     cited_ids = {token[1:-1] for token in CITATION_RE.findall(answer)}
     entries = []
     for source_id in sorted(cited_ids, key=lambda value: int(value[1:])):

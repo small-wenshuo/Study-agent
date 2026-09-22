@@ -26,7 +26,9 @@
 </main><script>
   const messages = document.querySelector('#messages'), input = document.querySelector('#input'), send = document.querySelector('#send');
   let sessionId = null;
+  // 转义所有模型和用户文本，避免原始 HTML 被浏览器执行。
   function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  // 渲染受限 Markdown：只支持代码块、换行和 HTTP(S) 链接。
   function render(text){
     let safe=escapeHtml(text);
     safe=safe.replace(/```([\s\S]*?)```/g,(_,code)=>`<pre><code>${code.trim()}</code></pre>`);
@@ -36,8 +38,11 @@
     });
     return safe.replace(/\n/g,'<br>');
   }
+  // 向聊天区域追加一条用户或助手消息。
   function add(role,text){ document.querySelector('.empty')?.remove(); const el=document.createElement('article'); el.className=`msg ${role}`; el.innerHTML=render(text); messages.append(el); messages.scrollTop=messages.scrollHeight; return el; }
+  // 请求新的后端会话并清空当前页面消息。
   async function newSession(){ const r=await fetch('/api/sessions',{method:'POST'}); sessionId=(await r.json()).session_id; messages.innerHTML='<div class="empty">新会话已就绪。</div>'; }
+  // 提交问题并逐块解析后端返回的 SSE 事件。
   async function submit(event){
     event.preventDefault(); const question=input.value.trim(); if(!question)return; if(!sessionId)await newSession();
     add('user',question); input.value=''; input.disabled=send.disabled=true; const status=document.createElement('div'); status.className='status'; messages.append(status);
@@ -52,5 +57,7 @@
       }
     }catch(error){ add('assistant',`请求失败：${error.message}`); } finally { status.remove(); input.disabled=send.disabled=false; input.focus(); }
   }
-  document.querySelector('#form').addEventListener('submit',submit); document.querySelector('#new').addEventListener('click',newSession); input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.querySelector('#form').requestSubmit()}}); newSession();
+  document.querySelector('#form').addEventListener('submit',submit); document.querySelector('#new').addEventListener('click',newSession);
+  // Enter 发送，Shift+Enter 保留为换行。
+  input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.querySelector('#form').requestSubmit()}}); newSession();
 </script></body></html>

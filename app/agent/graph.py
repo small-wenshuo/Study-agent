@@ -26,11 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 def needs_sources(text: str) -> bool:
+    """根据用户措辞判断本轮是否明确需要联网来源。"""
     markers = ("来源", "引用", "链接", "文档", "最新", "现在", "当前", "官网", "查一下", "搜索")
     return any(marker in text for marker in markers)
 
 
 class StudyAgent:
+    """编排模型决策、工具执行和引用校验的 LangGraph Agent。"""
+
     def __init__(
         self,
         model: ModelClient,
@@ -41,6 +44,7 @@ class StudyAgent:
         task_timeout: int = 180,
         tool_timeout: int = 30,
     ) -> None:
+        """注入外部服务并设置每次任务的执行预算。"""
         self.model = model
         self.search_provider = search_provider
         self.max_search_rounds = max_search_rounds
@@ -53,6 +57,7 @@ class StudyAgent:
         self.graph = self._build_graph()
 
     def _build_graph(self):
+        """构建“模型 → 工具 → 模型 → 引用校验”的状态图。"""
         workflow = StateGraph(AgentState)
         workflow.add_node("agent", self._agent_node)
         workflow.add_node("tools", self._tools_node)
@@ -64,6 +69,7 @@ class StudyAgent:
         return workflow.compile()
 
     async def _emit(self, kind: str, message: str) -> None:
+        """向当前请求发送进度事件，同时隔离并发会话。"""
         progress = self._progress.get()
         if progress:
             result = progress(kind, message)
@@ -71,6 +77,7 @@ class StudyAgent:
                 await result
 
     async def _agent_node(self, state: AgentState) -> dict[str, Any]:
+        """调用模型决定下一步工具动作或生成最终回答。"""
         if state["agent_steps"] >= self.max_tool_calls + 3:
             return {
                 "messages": [AIMessage(content="执行步骤已达上限。我只能基于目前获得的信息作答；如证据不足，请缩小问题范围后重试。")],
@@ -94,10 +101,12 @@ class StudyAgent:
 
     @staticmethod
     def _after_agent(state: AgentState) -> str:
+        """根据模型是否返回工具调用选择下一个图节点。"""
         last = state["messages"][-1]
         return "tools" if isinstance(last, AIMessage) and last.tool_calls else "validate"
 
     async def _tools_node(self, state: AgentState) -> dict[str, Any]:
+        """按顺序校验并执行模型请求的白名单工具。"""
         message = state["messages"][-1]
         assert isinstance(message, AIMessage)
         results = dict(state["search_results"])
@@ -133,6 +142,7 @@ class StudyAgent:
         }
 
     async def _search(self, args: Any, results: dict[str, dict[str, str]], rounds: int) -> tuple[dict[str, Any], int]:
+        """执行一次受预算限制的搜索，并登记稳定的 R 编号。"""
         query = args.get("query") if isinstance(args, dict) else None
         if not isinstance(query, str) or not query.strip() or len(query) > 1000:
             return {"ok": False, "error_type": "invalid_arguments", "message": "query 必须是 1～1000 字符的字符串"}, rounds
@@ -163,6 +173,7 @@ class StudyAgent:
         results: dict[str, dict[str, str]],
         sources: dict[str, dict[str, Any]],
     ) -> dict[str, Any]:
+        """读取已登记的搜索结果，并将成功正文登记为 S 来源。"""
         ids = args.get("result_ids") if isinstance(args, dict) else None
         if not isinstance(ids, list) or not 1 <= len(ids) <= 3 or any(not isinstance(value, str) for value in ids):
             return {"ok": False, "error_type": "invalid_arguments", "message": "result_ids 必须包含 1～3 个结果编号"}
@@ -202,6 +213,7 @@ class StudyAgent:
         return {"ok": bool(documents), "documents": documents, "failures": failures}
 
     async def _validate_node(self, state: AgentState) -> dict[str, Any]:
+        """校验回答中的来源编号，必要时触发一次模型修复。"""
         message = state["messages"][-1]
         answer = self._message_text(message)
         valid, reason = validate_citations(answer, state["sources"], state["requires_sources"])
@@ -222,10 +234,12 @@ class StudyAgent:
 
     @staticmethod
     def _after_validate(state: AgentState) -> str:
+        """在引用修复和结束任务之间选择后续节点。"""
         return "done" if state["answer"] else "repair"
 
     @staticmethod
     def _message_text(message: BaseMessage) -> str:
+        """兼容纯文本与内容块两种模型响应格式。"""
         if not isinstance(message, AIMessage):
             return ""
         if isinstance(message.content, str):
@@ -242,6 +256,7 @@ class StudyAgent:
         question: str,
         progress: ProgressCallback | None = None,
     ) -> str:
+        """运行一次有总超时保护的 Agent 任务并返回最终文本。"""
         from langchain_core.messages import HumanMessage
 
         task_id = str(uuid4())

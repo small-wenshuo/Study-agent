@@ -10,20 +10,31 @@ import httpx
 
 
 class SearchProvider(Protocol):
-    async def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]: ...
-    async def extract(self, urls: list[str]) -> list[dict[str, Any]]: ...
+    """Agent 搜索和正文读取所需的供应商接口。"""
+
+    async def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        """搜索公开网页并返回供筛选的结果摘要。"""
+        ...
+
+    async def extract(self, urls: list[str]) -> list[dict[str, Any]]:
+        """按 URL 顺序提取网页正文或失败原因。"""
+        ...
 
 
 class ProviderError(RuntimeError):
+    """表示已经清理过敏感细节的外部服务错误。"""
+
     pass
 
 
 def _is_public_ip(value: str) -> bool:
+    """判断 IP 是否可公开路由，用于阻止本机和私网目标。"""
     address = ipaddress.ip_address(value)
     return not (address.is_private or address.is_loopback or address.is_link_local or address.is_reserved)
 
 
 async def validate_public_url(url: str, timeout: float = 5.0) -> None:
+    """校验 URL 协议、主机名及其 DNS 结果均指向公开网络。"""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username:
         raise ValueError("只允许公开 HTTP(S) 地址")
@@ -49,11 +60,15 @@ async def validate_public_url(url: str, timeout: float = 5.0) -> None:
 
 
 class TavilyProvider:
+    """通过 Tavily API 实现网页搜索和正文提取。"""
+
     def __init__(self, api_key: str, timeout: int = 30) -> None:
+        """保存 API 密钥和单次外部请求超时。"""
         self._api_key = api_key
         self._timeout = timeout
 
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """发送 Tavily 请求，并仅对暂时性错误重试一次。"""
         payload = {"api_key": self._api_key, **payload}
         last_error: Exception | None = None
         for attempt in range(2):
@@ -76,6 +91,7 @@ class TavilyProvider:
         raise ProviderError(f"Tavily 请求失败：{type(last_error).__name__}") from last_error
 
     async def search(self, query: str, max_results: int = 5) -> list[dict[str, str]]:
+        """搜索网页、过滤非公开地址并统一结果字段。"""
         data = await self._post(
             "search",
             {"query": query, "max_results": max_results, "search_depth": "advanced", "include_raw_content": False},
@@ -95,6 +111,7 @@ class TavilyProvider:
         return results
 
     async def extract(self, urls: list[str]) -> list[dict[str, Any]]:
+        """提取已校验 URL 的正文，并保持输入顺序返回结果。"""
         for url in urls:
             await validate_public_url(url)
         data = await self._post("extract", {"urls": urls, "extract_depth": "advanced", "include_images": False})
