@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -12,6 +13,9 @@ from uuid import uuid4
 from app.knowledge_base.vector_store import VectorRecord, VectorStore
 from app.parsers import Document, ParseError, ParserRegistry
 from app.retrieval import HybridReranker
+
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingProvider(Protocol):
@@ -234,11 +238,22 @@ class KnowledgeBaseService:
                 asyncio.to_thread(self._parsers.parse, safe_name, data), timeout=self._processing_timeout
             )
             chunks = self._chunk_documents(documents, file_id, knowledge_base_id)
-            embeddings = await asyncio.wait_for(
-                self._embeddings.embed_documents([chunk.content for chunk in chunks]), timeout=self._processing_timeout
-            )
-            if len(embeddings) != len(chunks):
-                raise RuntimeError("Embedding 返回数量与 Chunk 不一致")
+            try:
+                embeddings = await asyncio.wait_for(
+                    self._embeddings.embed_documents([chunk.content for chunk in chunks]),
+                    timeout=self._processing_timeout,
+                )
+                if len(embeddings) != len(chunks):
+                    raise RuntimeError("Embedding 返回数量与 Chunk 不一致")
+            except Exception as exc:
+                # 对用户返回稳定提示，同时在日志中保留第三方服务的原始错误，且不记录密钥。
+                logger.exception(
+                    "embedding_generation_failed file_id=%s error_type=%s error=%s",
+                    file_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise ValueError("向量生成失败，请检查 Embedding 服务配置") from exc
             records = [
                 VectorRecord(str(uuid4()), chunk.content, embedding, chunk.metadata)
                 for chunk, embedding in zip(chunks, embeddings, strict=True)
@@ -253,6 +268,13 @@ class KnowledgeBaseService:
                 )
         except Exception as exc:
             message = str(exc) if isinstance(exc, (ParseError, ValueError)) else "文件处理失败"
+            if not isinstance(exc, (ParseError, ValueError)):
+                logger.exception(
+                    "knowledge_file_processing_failed file_id=%s error_type=%s error=%s",
+                    file_id,
+                    type(exc).__name__,
+                    exc,
+                )
             with self._lock, self._connection:
                 self._connection.execute("UPDATE files SET status = 'failed', error = ? WHERE id = ?", (message, file_id))
             raise ValueError(message) from exc

@@ -16,6 +16,8 @@ class OpenAICompatibleEmbeddings:
             base_url=settings.embedding_base_url,
             timeout=settings.tool_timeout_seconds,
             max_retries=1,
+            # DashScope 的兼容接口只接受字符串，不能接收 LangChain 本地分词后的 Token 数组。
+            check_embedding_ctx_length=False,
         )
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:

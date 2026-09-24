@@ -117,12 +117,15 @@ class KnowledgeBaseServiceTests(unittest.IsolatedAsyncioTestCase):
         knowledge_base = self.service.create_knowledge_base("课程")
         self.embeddings.fail_documents_once = True
 
-        with self.assertRaisesRegex(ValueError, "文件处理失败"):
-            await self.service.ingest_file(
-                knowledge_base["id"], "python.txt", "text/plain", b"python decorator"
-            )
+        with self.assertLogs("app.knowledge_base.service", level="ERROR") as logs:
+            with self.assertRaisesRegex(ValueError, "向量生成失败，请检查 Embedding 服务配置"):
+                await self.service.ingest_file(
+                    knowledge_base["id"], "python.txt", "text/plain", b"python decorator"
+                )
         failed = self.service.list_files(knowledge_base["id"])[0]
 
+        self.assertEqual(failed["error"], "向量生成失败，请检查 Embedding 服务配置")
+        self.assertIn("temporary embedding failure", "\n".join(logs.output))
         retried = await self.service.retry_file(knowledge_base["id"], str(failed["id"]))
 
         self.assertEqual(retried["status"], "ready")
