@@ -30,7 +30,6 @@ class OpenAICompatibleModel:
             # 避免底层异常与图的单次模型超时竞争。
             timeout=settings.model_timeout_seconds + 5,
             max_retries=0,
-            temperature=0.2,
         )
 
     async def ainvoke(self, messages: Sequence[BaseMessage], tools_enabled: bool) -> AIMessage:
