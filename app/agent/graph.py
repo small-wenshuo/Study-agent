@@ -227,8 +227,11 @@ class StudyAgent:
         history: Sequence[BaseMessage],
         question: str,
         progress: ProgressCallback | None = None,
+        *,
+        knowledge_base_id: str | None = None,
+        allow_web: bool = False,
     ) -> str:
-        """运行一次有总超时保护的 Agent 任务并返回最终文本。"""
+        """运行一次有总超时保护的 V1 任务；V2 上下文参数由包装 Agent 使用。"""
         from langchain_core.messages import HumanMessage
 
         task_id = str(uuid4())

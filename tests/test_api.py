@@ -23,7 +23,16 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         """健康接口只能暴露就绪状态和缺失字段名。"""
         response = await self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(response.json()), {"model_ready", "search_ready", "missing_model_fields"})
+        self.assertEqual(
+            set(response.json()),
+            {
+                "model_ready",
+                "search_ready",
+                "knowledge_base_ready",
+                "missing_model_fields",
+                "missing_embedding_fields",
+            },
+        )
 
     async def test_create_session(self):
         """创建会话接口应返回非空会话 ID。"""

@@ -14,7 +14,7 @@ class BlockingAgent:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, history, question, progress=None):
+    async def run(self, history, question, progress=None, **kwargs):
         """标记任务开始并等待测试主动释放。"""
         self.started.set()
         await self.release.wait()

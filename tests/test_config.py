@@ -28,6 +28,39 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "MODEL_MAX_RETRIES"):
                 Settings.from_env()
 
+    def test_embedding_configuration_controls_knowledge_base_readiness(self):
+        """知识库只有在独立 Embedding 配置完整时才应就绪。"""
+        with patch.dict(
+            os.environ,
+            {
+                "EMBEDDING_MODEL": "text-embedding",
+                "EMBEDDING_BASE_URL": "https://provider.example/v1",
+                "EMBEDDING_API_KEY": "secret",
+                "CHUNK_SIZE": "1000",
+                "CHUNK_OVERLAP": "100",
+            },
+        ):
+            settings = Settings.from_env()
+
+        self.assertTrue(settings.knowledge_base_ready)
+        self.assertEqual(settings.max_upload_bytes, settings.max_upload_mb * 1024 * 1024)
+
+    def test_invalid_chunk_overlap_disables_knowledge_base(self):
+        """重叠长度不小于 Chunk 时不得启动知识库。"""
+        with patch.dict(
+            os.environ,
+            {
+                "EMBEDDING_MODEL": "text-embedding",
+                "EMBEDDING_BASE_URL": "https://provider.example/v1",
+                "EMBEDDING_API_KEY": "secret",
+                "CHUNK_SIZE": "500",
+                "CHUNK_OVERLAP": "500",
+            },
+        ):
+            settings = Settings.from_env()
+
+        self.assertFalse(settings.knowledge_base_ready)
+
 
 if __name__ == "__main__":
     unittest.main()

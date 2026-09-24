@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.agent.graph import ProgressCallback, StudyAgent
+from app.agent.graph import ProgressCallback
 
 
 @dataclass(slots=True)
@@ -34,7 +34,16 @@ class SessionStore:
         """按 ID 查询会话，不存在时返回 None。"""
         return self._sessions.get(session_id)
 
-    async def chat(self, session_id: str, question: str, agent: StudyAgent, progress: ProgressCallback | None = None) -> str:
+    async def chat(
+        self,
+        session_id: str,
+        question: str,
+        agent,
+        progress: ProgressCallback | None = None,
+        *,
+        knowledge_base_id: str | None = None,
+        allow_web: bool = False,
+    ) -> str:
         """在会话锁内运行 Agent，并保存最近六轮对话。"""
         session = self.get(session_id)
         if session is None:
@@ -42,7 +51,13 @@ class SessionStore:
         if session.lock.locked():
             raise RuntimeError("该会话已有任务正在执行")
         async with session.lock:
-            answer = await agent.run(session.messages, question, progress)
+            answer = await agent.run(
+                session.messages,
+                question,
+                progress,
+                knowledge_base_id=knowledge_base_id,
+                allow_web=allow_web,
+            )
             session.messages.extend([HumanMessage(content=question), AIMessage(content=answer)])
             session.messages = session.messages[-12:]
             return answer

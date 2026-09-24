@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.citations import append_source_links, validate_citations
+from app.services.citations import (
+    append_knowledge_sources,
+    append_source_links,
+    validate_citations,
+    validate_knowledge_citations,
+)
 
 
 class CitationTests(unittest.TestCase):
@@ -30,6 +35,16 @@ class CitationTests(unittest.TestCase):
         """来源列表只应包含回答实际引用的项目。"""
         answer = append_source_links("结论 [S1]", self.sources)
         self.assertIn("[Official docs](https://example.com/docs)", answer)
+
+    def test_knowledge_citation_keeps_file_location(self):
+        """K 引用应校验真实编号并展示原文件定位。"""
+        sources = {"K1": {"filename": "课件.pptx", "page": 13}}
+
+        valid, reason = validate_knowledge_citations("结论 [K1]", sources)
+        answer = append_knowledge_sources("结论 [K1]", sources)
+
+        self.assertTrue(valid, reason)
+        self.assertIn("课件.pptx，第 13 页", answer)
 
 
 if __name__ == "__main__":

@@ -5,59 +5,64 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Study Agent</title>
   <style>
-    :root { color-scheme: light; --ink:#17202a; --muted:#667085; --line:#d8dee8; --accent:#3157d5; --paper:#fff; --wash:#f4f6fb; }
-    * { box-sizing:border-box } body { margin:0; font:16px/1.62 system-ui,sans-serif; color:var(--ink); background:var(--wash) }
-    main { width:min(900px,100%); min-height:100vh; margin:auto; background:var(--paper); display:grid; grid-template-rows:auto 1fr auto }
-    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center }
-    h1 { margin:0; font-size:20px } button { border:1px solid var(--line); background:white; border-radius:9px; padding:9px 13px; cursor:pointer }
+    :root { color-scheme:light; --ink:#17202a; --muted:#667085; --line:#d8dee8; --accent:#3157d5; --danger:#b42318; --paper:#fff; --wash:#f4f6fb; }
+    * { box-sizing:border-box } body { margin:0; font:15px/1.55 system-ui,sans-serif; color:var(--ink); background:var(--wash) }
+    main { width:min(1120px,100%); height:100vh; margin:auto; background:var(--paper); display:grid; grid-template:64px 1fr auto/280px 1fr }
+    header { grid-column:1/-1; padding:14px 20px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center }
+    h1,h2 { margin:0 } h1 { font-size:20px } h2 { font-size:15px }
+    button { border:1px solid var(--line); background:white; border-radius:9px; padding:8px 11px; cursor:pointer }
+    button:hover { border-color:#a8b2c4 } button:disabled,input:disabled,textarea:disabled { opacity:.55 }
+    aside { grid-row:2/4; padding:18px; border-right:1px solid var(--line); overflow:auto; background:#fafbfc }
+    .toolbar { display:flex; gap:7px; margin:10px 0 } select,input[type=file] { width:100%; border:1px solid var(--line); border-radius:8px; padding:8px; background:white }
+    .primary { color:white; background:var(--accent); border-color:var(--accent) } .danger { color:var(--danger) }
+    .files { list-style:none; margin:12px 0; padding:0 } .files li { border:1px solid var(--line); background:white; border-radius:9px; padding:9px; margin-bottom:8px }
+    .file-name { overflow-wrap:anywhere } .file-meta { color:var(--muted); font-size:12px; margin:3px 0 7px } .file-actions { display:flex; gap:6px }
+    .hint { color:var(--muted); font-size:13px } .option { display:flex; gap:7px; align-items:flex-start; margin-top:14px }
     #messages { padding:28px 24px; overflow:auto } .empty { color:var(--muted); text-align:center; margin-top:15vh }
-    .msg { max-width:82%; margin:0 0 20px; padding:13px 16px; border-radius:14px; white-space:pre-wrap; overflow-wrap:anywhere }
+    .msg { max-width:86%; margin:0 0 20px; padding:13px 16px; border-radius:14px; white-space:pre-wrap; overflow-wrap:anywhere }
     .user { margin-left:auto; background:#e9efff } .assistant { background:#f5f6f8 } .assistant a { color:var(--accent) }
     .status { color:var(--muted); font-size:14px; padding:0 5px 12px } pre { overflow:auto; background:#202632; color:#f4f6fb; padding:12px; border-radius:8px }
-    form { border-top:1px solid var(--line); padding:16px 24px; display:flex; gap:10px } textarea { flex:1; min-height:52px; max-height:160px; resize:vertical; border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit }
-    form button { color:white; background:var(--accent); border-color:var(--accent) } button:disabled, textarea:disabled { opacity:.55 }
-    @media(max-width:600px){ .msg{max-width:95%} header,#messages,form{padding-left:14px;padding-right:14px} }
+    #chat-form { border-top:1px solid var(--line); padding:16px 24px; display:flex; gap:10px } textarea { flex:1; min-height:52px; max-height:160px; resize:vertical; border:1px solid var(--line); border-radius:10px; padding:12px; font:inherit }
+    @media(max-width:760px){ main{height:auto;min-height:100vh;grid-template:60px auto 1fr auto/1fr} header{grid-column:1} aside{grid-row:2;border-right:0;border-bottom:1px solid var(--line)} #messages{min-height:45vh}.msg{max-width:95%} }
   </style>
 </head>
 <body><main>
   <header><h1>Study Agent</h1><button id="new">新建会话</button></header>
-  <section id="messages"><div class="empty">问一个计算机问题。需要资料时，我会先搜索并阅读正文。</div></section>
-  <form id="form"><textarea id="input" required maxlength="12000" placeholder="例如：解释 Python 装饰器，并给出官方文档"></textarea><button id="send">发送</button></form>
+  <aside>
+    <h2>我的知识库</h2>
+    <div class="toolbar"><select id="knowledge-base"><option value="">不使用知识库</option></select><button id="create-kb">新建</button></div>
+    <div class="toolbar"><input id="file" type="file" accept=".pdf,.docx,.md,.txt,.pptx,.xlsx,.csv"><button id="upload" class="primary">上传</button></div>
+    <div id="kb-status" class="hint">支持 PDF、DOCX、Markdown、TXT、PPTX、XLSX 和 CSV。</div>
+    <label class="option"><input id="allow-web" type="checkbox"><span>知识库证据不足时，允许联网补充</span></label>
+    <ul id="files" class="files"></ul>
+    <button id="delete-kb" class="danger">删除当前知识库</button>
+  </aside>
+  <section id="messages"><div class="empty">选择知识库后可基于资料提问；不选择时保持普通问答。</div></section>
+  <form id="chat-form"><textarea id="input" required maxlength="12000" placeholder="例如：根据课件解释梯度下降"></textarea><button id="send" class="primary">发送</button></form>
 </main><script>
-  const messages = document.querySelector('#messages'), input = document.querySelector('#input'), send = document.querySelector('#send');
-  let sessionId = null;
-  // 转义所有模型和用户文本，避免原始 HTML 被浏览器执行。
-  function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  const messages=document.querySelector('#messages'), input=document.querySelector('#input'), send=document.querySelector('#send');
+  const kbSelect=document.querySelector('#knowledge-base'), files=document.querySelector('#files'), fileInput=document.querySelector('#file');
+  let sessionId=null;
+  // 转义所有外部文本，避免文件名、模型文本或错误消息被当作 HTML 执行。
+  function escapeHtml(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
   // 渲染受限 Markdown：只支持代码块、换行和 HTTP(S) 链接。
-  function render(text){
-    let safe=escapeHtml(text);
-    safe=safe.replace(/```([\s\S]*?)```/g,(_,code)=>`<pre><code>${code.trim()}</code></pre>`);
-    safe=safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,(_,label,url)=>{
-      const attributeUrl=url.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
-      return `<a href="${attributeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-    });
-    return safe.replace(/\n/g,'<br>');
-  }
+  function render(text){let safe=escapeHtml(text);safe=safe.replace(/```([\s\S]*?)```/g,(_,code)=>`<pre><code>${code.trim()}</code></pre>`);safe=safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,(_,label,url)=>{const safeUrl=url.replace(/&/g,'&amp;').replace(/"/g,'&quot;');return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`});return safe.replace(/\n/g,'<br>')}
   // 向聊天区域追加一条用户或助手消息。
-  function add(role,text){ document.querySelector('.empty')?.remove(); const el=document.createElement('article'); el.className=`msg ${role}`; el.innerHTML=render(text); messages.append(el); messages.scrollTop=messages.scrollHeight; return el; }
-  // 请求新的后端会话并清空当前页面消息。
-  async function newSession(){ const r=await fetch('/api/sessions',{method:'POST'}); sessionId=(await r.json()).session_id; messages.innerHTML='<div class="empty">新会话已就绪。</div>'; }
-  // 提交问题并逐块解析后端返回的 SSE 事件。
-  async function submit(event){
-    event.preventDefault(); const question=input.value.trim(); if(!question)return; if(!sessionId)await newSession();
-    add('user',question); input.value=''; input.disabled=send.disabled=true; const status=document.createElement('div'); status.className='status'; messages.append(status);
-    try{
-      const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,message:question})});
-      if(!response.ok){ const data=await response.json(); throw new Error(data.detail||'请求失败'); }
-      const reader=response.body.getReader(), decoder=new TextDecoder(); let buffer='';
-      while(true){ const {value,done}=await reader.read(); if(done)break; buffer+=decoder.decode(value,{stream:true}); const blocks=buffer.split('\n\n'); buffer=blocks.pop();
-        for(const block of blocks){ const eventName=block.match(/^event: (.+)$/m)?.[1], raw=block.match(/^data: (.+)$/m)?.[1]; if(!raw)continue; const data=JSON.parse(raw);
-          if(eventName==='status')status.textContent=data.message; if(eventName==='answer')add('assistant',data.answer); if(eventName==='error')add('assistant',`出错了：${data.message}`);
-        }
-      }
-    }catch(error){ add('assistant',`请求失败：${error.message}`); } finally { status.remove(); input.disabled=send.disabled=false; input.focus(); }
-  }
-  document.querySelector('#form').addEventListener('submit',submit); document.querySelector('#new').addEventListener('click',newSession);
-  // Enter 发送，Shift+Enter 保留为换行。
-  input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.querySelector('#form').requestSubmit()}}); newSession();
+  function add(role,text){document.querySelector('.empty')?.remove();const el=document.createElement('article');el.className=`msg ${role}`;el.innerHTML=render(text);messages.append(el);messages.scrollTop=messages.scrollHeight;return el}
+  async function jsonRequest(url,options={}){const response=await fetch(url,options);if(!response.ok){let detail='请求失败';try{detail=(await response.json()).detail||detail}catch{}throw new Error(detail)}return response.status===204?null:response.json()}
+  // 创建新会话并清空当前聊天记录。
+  async function newSession(){const data=await jsonRequest('/api/sessions',{method:'POST'});sessionId=data.session_id;messages.innerHTML='<div class="empty">新会话已就绪。</div>'}
+  // 刷新知识库选择器，同时保留仍然存在的当前选择。
+  async function loadKnowledgeBases(){const selected=kbSelect.value;const list=await jsonRequest('/api/knowledge-bases');kbSelect.innerHTML='<option value="">不使用知识库</option>';for(const kb of list){const option=document.createElement('option');option.value=kb.id;option.textContent=`${kb.name}（${kb.file_count} 个文件）`;kbSelect.append(option)}if([...kbSelect.options].some(item=>item.value===selected))kbSelect.value=selected;await loadFiles()}
+  // 展示当前知识库文件状态，并提供失败重试和删除入口。
+  async function loadFiles(){files.innerHTML='';const kbId=kbSelect.value;fileInput.disabled=document.querySelector('#upload').disabled=!kbId;document.querySelector('#delete-kb').disabled=!kbId;if(!kbId)return;const list=await jsonRequest(`/api/knowledge-bases/${kbId}/files`);for(const item of list){const li=document.createElement('li');const name=document.createElement('div');name.className='file-name';name.textContent=item.filename;const meta=document.createElement('div');meta.className='file-meta';meta.textContent=`${item.status} · ${item.chunk_count} 个文本块${item.error?' · '+item.error:''}`;const actions=document.createElement('div');actions.className='file-actions';if(item.status==='failed'){const retry=document.createElement('button');retry.textContent='重试';retry.onclick=async()=>{await jsonRequest(`/api/knowledge-bases/${kbId}/files/${item.id}/retry`,{method:'POST'});await loadFiles()};actions.append(retry)}const remove=document.createElement('button');remove.textContent='删除';remove.className='danger';remove.onclick=async()=>{if(confirm(`删除 ${item.filename}？`)){await jsonRequest(`/api/knowledge-bases/${kbId}/files/${item.id}`,{method:'DELETE'});await loadKnowledgeBases()}};actions.append(remove);li.append(name,meta,actions);files.append(li)}}
+  document.querySelector('#create-kb').onclick=async()=>{const name=prompt('知识库名称');if(!name?.trim())return;const kb=await jsonRequest('/api/knowledge-bases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});await loadKnowledgeBases();kbSelect.value=kb.id;await loadFiles()};
+  document.querySelector('#upload').onclick=async()=>{const file=fileInput.files[0],kbId=kbSelect.value;if(!file||!kbId)return;const body=new FormData();body.append('file',file);document.querySelector('#upload').disabled=true;try{await jsonRequest(`/api/knowledge-bases/${kbId}/files`,{method:'POST',body});fileInput.value='';await loadKnowledgeBases()}catch(error){alert(error.message)}finally{document.querySelector('#upload').disabled=false}};
+  document.querySelector('#delete-kb').onclick=async()=>{const kbId=kbSelect.value;if(kbId&&confirm('删除当前知识库及全部文件？')){await jsonRequest(`/api/knowledge-bases/${kbId}`,{method:'DELETE'});kbSelect.value='';await loadKnowledgeBases()}};
+  kbSelect.onchange=loadFiles;
+  // 提交问题并逐块解析 SSE 事件。
+  async function submit(event){event.preventDefault();const question=input.value.trim();if(!question)return;if(!sessionId)await newSession();add('user',question);input.value='';input.disabled=send.disabled=true;const status=document.createElement('div');status.className='status';messages.append(status);try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,message:question,knowledge_base_id:kbSelect.value||null,allow_web:document.querySelector('#allow-web').checked})});if(!response.ok){const data=await response.json();throw new Error(data.detail||'请求失败')}const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const blocks=buffer.split('\n\n');buffer=blocks.pop();for(const block of blocks){const eventName=block.match(/^event: (.+)$/m)?.[1],raw=block.match(/^data: (.+)$/m)?.[1];if(!raw)continue;const data=JSON.parse(raw);if(eventName==='status')status.textContent=data.message;if(eventName==='answer')add('assistant',data.answer);if(eventName==='error')add('assistant',`出错了：${data.message}`)}}}catch(error){add('assistant',`请求失败：${error.message}`)}finally{status.remove();input.disabled=send.disabled=false;input.focus()}}
+  document.querySelector('#chat-form').addEventListener('submit',submit);document.querySelector('#new').onclick=newSession;input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();document.querySelector('#chat-form').requestSubmit()}});
+  async function initialize(){await newSession();const health=await jsonRequest('/api/health');if(health.knowledge_base_ready){await loadKnowledgeBases();return}kbSelect.disabled=fileInput.disabled=document.querySelector('#upload').disabled=document.querySelector('#create-kb').disabled=document.querySelector('#delete-kb').disabled=true;document.querySelector('#kb-status').textContent=`知识库未启用：缺少 ${health.missing_embedding_fields.join('、')}。普通问答仍可使用。`}
+  initialize().catch(error=>add('assistant',`初始化失败：${error.message}`));
 </script></body></html>

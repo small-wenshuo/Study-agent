@@ -6,12 +6,16 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.graph import StudyAgent
+from app.agent.v2 import ModelKnowledgeModel, V2Assistant
 from app.config import Settings
+from app.knowledge_base import ChromaVectorStore, KnowledgeBaseService
+from app.parsers import ParserRegistry
+from app.providers.embeddings import OpenAICompatibleEmbeddings
 from app.providers.model import OpenAICompatibleModel
 from app.providers.tavily import TavilyProvider
 from app.services.sessions import SessionStore
@@ -23,13 +27,36 @@ settings = Settings.from_env()
 sessions = SessionStore()
 
 
-def build_agent() -> StudyAgent | None:
-    """在模型配置完整时组装生产用 Agent 及可选搜索服务。"""
+def build_knowledge_base() -> KnowledgeBaseService | None:
+    """在 Embedding 配置完整时组装本地知识库。"""
+    if not settings.knowledge_base_ready:
+        return None
+    data_dir = Path(settings.data_dir)
+    if not data_dir.is_absolute():
+        data_dir = (Path(__file__).resolve().parents[1] / data_dir).resolve()
+    return KnowledgeBaseService(
+        database_path=data_dir / "study-agent.db",
+        storage_dir=data_dir / "uploads",
+        parsers=ParserRegistry.default(),
+        embeddings=OpenAICompatibleEmbeddings(settings),
+        vectors=ChromaVectorStore(data_dir / "chroma"),
+        max_file_bytes=settings.max_upload_bytes,
+        chunk_size=settings.chunk_size,
+        chunk_overlap=settings.chunk_overlap,
+        processing_timeout=settings.knowledge_timeout_seconds,
+    )
+
+
+knowledge_bases = build_knowledge_base()
+
+
+def build_agent():
+    """组装 V1 Agent，并在知识库可用时包装为 V2 Assistant。"""
     if not settings.model_ready:
         return None
     model = OpenAICompatibleModel(settings)
     search = TavilyProvider(settings.tavily_api_key, settings.tool_timeout_seconds) if settings.search_ready else None
-    return StudyAgent(
+    base_agent = StudyAgent(
         model,
         search,
         max_search_rounds=settings.max_search_rounds,
@@ -39,10 +66,13 @@ def build_agent() -> StudyAgent | None:
         model_max_retries=settings.model_max_retries,
         tool_timeout=settings.tool_timeout_seconds,
     )
+    if knowledge_bases is None:
+        return base_agent
+    return V2Assistant(base_agent, knowledge_bases, ModelKnowledgeModel(model))
 
 
 agent = build_agent()
-app = FastAPI(title="Study Agent", version="0.1.0")
+app = FastAPI(title="Study Agent", version="0.2.0")
 
 
 class ChatRequest(BaseModel):
@@ -50,6 +80,8 @@ class ChatRequest(BaseModel):
 
     session_id: str
     message: str = Field(min_length=1, max_length=12000)
+    knowledge_base_id: str | None = None
+    allow_web: bool = False
 
     @field_validator("message")
     @classmethod
@@ -58,6 +90,20 @@ class ChatRequest(BaseModel):
         if not value.strip():
             raise ValueError("message 不能为空")
         return value
+
+
+class KnowledgeBaseCreate(BaseModel):
+    """定义创建知识库所需名称。"""
+
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        """拒绝空白知识库名称。"""
+        if not value.strip():
+            raise ValueError("name 不能为空")
+        return value.strip()
 
 
 @app.get("/")
@@ -72,7 +118,9 @@ async def health() -> dict[str, Any]:
     return {
         "model_ready": settings.model_ready,
         "search_ready": settings.search_ready,
+        "knowledge_base_ready": knowledge_bases is not None,
         "missing_model_fields": settings.missing_model_fields,
+        "missing_embedding_fields": settings.missing_embedding_fields,
     }
 
 
@@ -80,6 +128,88 @@ async def health() -> dict[str, Any]:
 async def create_session() -> dict[str, str]:
     """创建一个重启后即清空的内存会话。"""
     return {"session_id": sessions.create()}
+
+
+def _require_knowledge_bases() -> KnowledgeBaseService:
+    """返回已配置知识库，缺失 Embedding 配置时给出安全错误。"""
+    if knowledge_bases is None:
+        raise HTTPException(
+            503,
+            detail=f"知识库配置不完整：{', '.join(settings.missing_embedding_fields)}",
+        )
+    return knowledge_bases
+
+
+@app.post("/api/knowledge-bases", status_code=201)
+async def create_knowledge_base(request: KnowledgeBaseCreate) -> dict[str, object]:
+    """创建一个可容纳多文件的个人知识库。"""
+    return _require_knowledge_bases().create_knowledge_base(request.name)
+
+
+@app.get("/api/knowledge-bases")
+async def list_knowledge_bases() -> list[dict[str, object]]:
+    """列出知识库及文件、Chunk 数量。"""
+    return _require_knowledge_bases().list_knowledge_bases()
+
+
+@app.delete("/api/knowledge-bases/{knowledge_base_id}", status_code=204)
+async def delete_knowledge_base(knowledge_base_id: str) -> Response:
+    """删除知识库、原文件和全部索引。"""
+    try:
+        _require_knowledge_bases().delete_knowledge_base(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    return Response(status_code=204)
+
+
+@app.get("/api/knowledge-bases/{knowledge_base_id}/files")
+async def list_knowledge_base_files(knowledge_base_id: str) -> list[dict[str, object]]:
+    """返回一个知识库内的文件处理状态。"""
+    try:
+        return _require_knowledge_bases().list_files(knowledge_base_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+
+
+@app.post("/api/knowledge-bases/{knowledge_base_id}/files", status_code=201)
+async def upload_knowledge_base_file(
+    knowledge_base_id: str, file: UploadFile = File(...)
+) -> dict[str, object]:
+    """有限读取上传文件并同步完成首期解析和入库。"""
+    service = _require_knowledge_bases()
+    data = await file.read(settings.max_upload_bytes + 1)
+    try:
+        return await service.ingest_file(
+            knowledge_base_id,
+            file.filename or "upload",
+            file.content_type or "application/octet-stream",
+            data,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@app.delete("/api/knowledge-bases/{knowledge_base_id}/files/{file_id}", status_code=204)
+async def delete_knowledge_base_file(knowledge_base_id: str, file_id: str) -> Response:
+    """删除一个文件及其全部向量。"""
+    try:
+        _require_knowledge_bases().delete_file(knowledge_base_id, file_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    return Response(status_code=204)
+
+
+@app.post("/api/knowledge-bases/{knowledge_base_id}/files/{file_id}/retry")
+async def retry_knowledge_base_file(knowledge_base_id: str, file_id: str) -> dict[str, object]:
+    """使用原文件重试失败的解析或重新构建索引。"""
+    try:
+        return await _require_knowledge_bases().retry_file(knowledge_base_id, file_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
 
 
 def _sse(event: str, data: Any) -> str:
@@ -106,7 +236,14 @@ async def chat(request: ChatRequest) -> StreamingResponse:
         async def execute() -> None:
             """运行会话任务并保证无论成败都发送 done 事件。"""
             try:
-                answer = await sessions.chat(request.session_id, request.message.strip(), agent, progress)
+                answer = await sessions.chat(
+                    request.session_id,
+                    request.message.strip(),
+                    agent,
+                    progress,
+                    knowledge_base_id=request.knowledge_base_id,
+                    allow_web=request.allow_web,
+                )
                 await queue.put(("answer", {"answer": answer}))
             except (KeyError, RuntimeError) as exc:
                 await queue.put(("error", {"message": str(exc).strip("'")}))
