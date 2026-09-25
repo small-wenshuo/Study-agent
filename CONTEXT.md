@@ -52,11 +52,11 @@ README 中的测试命令可离线验证核心分支。当前覆盖七类解析�
 
 2026-09-22 已使用本地真实模型和 Tavily 对 `evals/questions.json` 完成端到端回归：修复前 13/20，修复超时分类、模型重试、来源保留和先读后搜后通过 20/20。报告见 `.scratch/study-agent-v1/evaluation-2026-09-22.md`。该验收确认真实 Tool Calling、搜索、正文读取和引用链路可运行；事实正确性与引用支持度目前仅人工抽查，尚无独立自动评分。
 
-2026-09-24 本机模型和 Tavily 配置可用，但缺少 `EMBEDDING_MODEL`，因此 V2 尚未做真实 Embedding 入库和端到端知识库问答。已知的 V1 URL 重定向核验缺口仍然存在。
+2026-09-25 已使用 W3C、RFC Editor、Microsoft 和上游解析库的七类公开文件完成 V2 真实验收。初测 3/7，修复 DashScope 每批 20 条限制、CSV 说明行/空表头丢列和证据判定过度保守后，PDF、DOCX、Markdown、TXT、PPTX、CSV 均通过严格端到端问答；XLSX 曾成功完成 213 Chunk 入库与问答，但收紧问题后的最终复验被 DashScope 429 `insufficient_quota` 阻断。报告与复测脚本见 `.scratch/study-agent-v2/file-acceptance-report.md` 和 `run_file_acceptance.py`。已知的 V1 URL 重定向核验缺口仍然存在。
 
 ## 续作优先级
 
-1. 配置真实 Embedding 模型，使用真实 PDF/DOCX/PPTX/XLSX 完成 V2 端到端验收。
+1. DashScope 额度恢复后，补跑 XLSX 唯一记录问题，闭环严格 7/7 真实验收。
 2. 建立“可答、部分可答、超纲”评测集，校准召回数量、Rerank 和模型证据判定。
 3. 把同步上传处理改为受控后台任务，补任务容量、过期清理和更细的可观测性。
 4. 增加基于总 token 预算的历史/证据裁剪，并评估专用 Reranker。

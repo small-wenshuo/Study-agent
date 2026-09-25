@@ -72,6 +72,26 @@ class ParserRegistryTests(unittest.TestCase):
         self.assertIn("姓名: 小明", documents[0].content)
         self.assertEqual(documents[0].metadata["block_type"], "table")
 
+    def test_csv_detects_header_after_notes_and_preserves_unnamed_value_columns(self):
+        """说明行和空表头不得导致后续数据列静默丢失。"""
+        source = """Camborne,,,,,,,,,,,,
+Location 1627E 407N 87m amsl,,,,,,,,,,,,
+yyyy,mm,tmax,,tmin,,af,,rain,,sun,,
+,,degC,,degC,,days,,mm,,hours,,
+2014,04,12.3,,7.4,,0,,81.4,,154.9,,Provisional
+"""
+
+        documents = self.parsers.parse("weather.csv", source.encode("utf-8"))
+
+        content = documents[0].content
+        self.assertIn("yyyy: 2014", content)
+        self.assertIn("mm: 04", content)
+        self.assertIn("tmax: 12.3", content)
+        self.assertIn("tmin: 7.4", content)
+        self.assertIn("rain: 81.4", content)
+        self.assertIn("sun: 154.9", content)
+        self.assertIn("column_13: Provisional", content)
+
     def test_pdf_keeps_page_number(self):
         """可复制文本 PDF 应提取正文并保留一基页码。"""
         writer = PdfWriter()

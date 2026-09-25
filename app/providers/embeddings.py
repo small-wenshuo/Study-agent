@@ -8,7 +8,8 @@ from app.config import Settings
 class OpenAICompatibleEmbeddings:
     """把 OpenAI-compatible Embeddings 接口适配给知识库服务。"""
 
-    _MAX_BATCH_SIZE = 25
+    # DashScope 当前兼容接口对文档向量请求最多接受 20 条输入。
+    _MAX_BATCH_SIZE = 20
 
     def __init__(self, settings: Settings) -> None:
         """使用独立 Embedding 配置创建客户端。"""

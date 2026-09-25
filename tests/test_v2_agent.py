@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
 
-from app.agent.v2 import EvidenceAssessment, V2Assistant
+from langchain_core.messages import AIMessage
+
+from app.agent.v2 import EvidenceAssessment, ModelKnowledgeModel, V2Assistant
 from app.knowledge_base import RetrievalHit
 
 
@@ -54,6 +57,26 @@ class FakeWebAgent:
         """模拟 V1 联网回答。"""
         self.calls.append(question)
         return "联网结论。[S1]\n\n来源：\n- [S1] [官方资料](https://example.com)"
+
+
+class ScopeSensitiveModel:
+    """只有提示词明确限制“缺口”范围时才判定证据充分。"""
+
+    async def ainvoke(self, messages, tools_enabled):
+        """模拟模型因追问无关信息而产生的过度保守判定。"""
+        prompt = str(messages[-1].content)
+        constrained = "不要把问题未要求的信息视为缺口" in prompt
+        return AIMessage(
+            content=json.dumps(
+                {
+                    "level": "sufficient" if constrained else "partial",
+                    "reason": "问题要求已被证据覆盖" if constrained else "缺少未要求的格式信息",
+                    "supported_aspects": ["问题要求"],
+                    "missing_aspects": [] if constrained else ["格式信息"],
+                },
+                ensure_ascii=False,
+            )
+        )
 
 
 def hit() -> RetrievalHit:
@@ -125,6 +148,15 @@ class V2AssistantTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("联网结论", answer)
         self.assertEqual(web.calls, ["什么是二分查找？"])
+
+    async def test_evidence_assessment_only_considers_information_the_question_requests(self):
+        """证据已覆盖问题时，不得因未提问的格式或元数据降级为部分充分。"""
+        model = ModelKnowledgeModel(ScopeSensitiveModel())
+
+        assessment = await model.assess("检索证据中出现了什么文本？", [hit()])
+
+        self.assertEqual(assessment.level, "sufficient")
+        self.assertEqual(assessment.missing_aspects, [])
 
 
 if __name__ == "__main__":

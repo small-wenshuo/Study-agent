@@ -83,14 +83,66 @@ class CsvParser:
 
     extensions = frozenset({".csv"})
 
+    @staticmethod
+    def _header_score(row: list[str]) -> tuple[int, int]:
+        """优先选择包含多个文本字段名的行，跳过文件开头的说明文字。"""
+        nonempty = [cell.strip() for cell in row if cell.strip()]
+        text_labels = sum(
+            1
+            for cell in nonempty
+            if re.search(r"[^\W\d_]", cell, re.UNICODE) and not re.fullmatch(r"[-+]?\d+(?:\.\d+)?", cell)
+        )
+        return text_labels, len(nonempty)
+
+    @classmethod
+    def _find_header_index(cls, rows: list[list[str]]) -> int:
+        """在前 50 行中寻找最像字段表头的行，同分时保留更早位置。"""
+        candidates = range(min(50, len(rows)))
+        return max(candidates, key=lambda index: (cls._header_score(rows[index]), -index))
+
     def parse(self, filename: str, data: bytes) -> list[Document]:
-        """保留表头语义，避免将单元格拆成无上下文片段。"""
-        reader = csv.DictReader(io.StringIO(_decode_text(data)))
-        rows = [
-            " | ".join(f"{key}: {value}" for key, value in row.items() if key and value not in (None, ""))
-            for row in reader
+        """识别说明行后的真实表头，并为有数据的空表头列生成稳定名称。"""
+        parsed_rows = [
+            [cell.strip() for cell in row]
+            for row in csv.reader(io.StringIO(_decode_text(data)))
+            if any(cell.strip() for cell in row)
         ]
-        content = "\n".join(row for row in rows if row).strip()
+        if not parsed_rows:
+            return []
+
+        header_index = self._find_header_index(parsed_rows)
+        raw_headers = parsed_rows[header_index]
+        data_rows = parsed_rows[header_index + 1 :]
+        column_count = max(len(row) for row in parsed_rows[header_index:])
+
+        # 空表头有时是视觉分隔列，有时承载状态值；只保留后续确实有值的列。
+        active_columns = [
+            index
+            for index in range(column_count)
+            if (index < len(raw_headers) and raw_headers[index])
+            or any(index < len(row) and row[index] for row in data_rows)
+        ]
+        headers: dict[int, str] = {}
+        seen: dict[str, int] = {}
+        for index in active_columns:
+            base = raw_headers[index] if index < len(raw_headers) and raw_headers[index] else f"column_{index + 1}"
+            seen[base] = seen.get(base, 0) + 1
+            headers[index] = base if seen[base] == 1 else f"{base}_{seen[base]}"
+
+        output_rows = [
+            "Note: " + " | ".join(cell for cell in row if cell)
+            for row in parsed_rows[:header_index]
+        ]
+        for row in data_rows:
+            rendered = " | ".join(
+                f"{headers[index]}: {row[index]}"
+                for index in active_columns
+                if index < len(row) and row[index]
+            )
+            if rendered:
+                output_rows.append(rendered)
+
+        content = "\n".join(output_rows).strip()
         return [Document(content, _metadata(filename, "table"))] if content else []
 
 
