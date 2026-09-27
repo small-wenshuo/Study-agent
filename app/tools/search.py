@@ -23,6 +23,16 @@ SEARCH_WEB_SCHEMA: dict[str, Any] = {
 }
 
 
+def _next_result_id(search_results: dict[str, dict[str, str]]) -> str:
+    """基于现有最大 R 编号生成新编号，避免编号空洞导致覆盖。"""
+    numbers = (
+        int(result_id[1:])
+        for result_id in search_results
+        if result_id.startswith("R") and result_id[1:].isdigit()
+    )
+    return f"R{max(numbers, default=0) + 1}"
+
+
 class SearchWebTool:
     """隐藏搜索参数校验、预算、调用和 R 编号登记逻辑。"""
 
@@ -73,7 +83,7 @@ class SearchWebTool:
         for item in found:
             if item["url"] in known_urls:
                 continue
-            result_id = f"R{len(context.search_results) + 1}"
+            result_id = _next_result_id(context.search_results)
             value = {"result_id": result_id, **item}
             context.search_results[result_id] = value
             registered.append(value)

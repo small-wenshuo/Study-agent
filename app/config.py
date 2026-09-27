@@ -47,6 +47,9 @@ class Settings:
     chunk_size: int = 1200
     chunk_overlap: int = 150
     knowledge_timeout_seconds: int = 120
+    memory_window_turns: int = 6
+    memory_context_chars: int = 24000
+    memory_timeout_seconds: int = 30
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -72,6 +75,9 @@ class Settings:
             chunk_size=_integer("CHUNK_SIZE", 1200, 100),
             chunk_overlap=_integer("CHUNK_OVERLAP", 150, 0),
             knowledge_timeout_seconds=_integer("KNOWLEDGE_TIMEOUT_SECONDS", 120, 1),
+            memory_window_turns=_integer("MEMORY_WINDOW_TURNS", 6, 1),
+            memory_context_chars=_integer("MEMORY_CONTEXT_CHARS", 24000, 16000),
+            memory_timeout_seconds=_integer("MEMORY_TIMEOUT_SECONDS", 30, 1),
         )
 
     @property

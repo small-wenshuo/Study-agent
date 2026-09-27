@@ -29,6 +29,16 @@
 <body><main>
   <header><h1>Study Agent</h1><button id="new">新建会话</button></header>
   <aside>
+    <h2>聊天记录</h2>
+    <select id="session-list" aria-label="历史会话"></select>
+    <button id="more-sessions">更多会话</button>
+    <details><summary>当前会话摘要</summary><p id="session-summary" class="hint">暂无摘要</p></details>
+    <details><summary>长期记忆</summary>
+      <p class="hint">用于后续会话。可发送“记住：……”保存全局记忆；不会自动推断个人事实。</p>
+      <div id="memory-status" class="hint"></div>
+      <button id="add-memory">添加记忆</button><ul id="memories" class="files"></ul>
+    </details>
+    <hr>
     <h2>我的知识库</h2>
     <div class="toolbar"><select id="knowledge-base"><option value="">不使用知识库</option></select><button id="create-kb">新建</button></div>
     <div class="toolbar"><input id="file" type="file" accept=".pdf,.docx,.md,.txt,.pptx,.xlsx,.csv"><button id="upload" class="primary">上传</button></div>
@@ -42,7 +52,13 @@
 </main><script>
   const messages=document.querySelector('#messages'), input=document.querySelector('#input'), send=document.querySelector('#send');
   const kbSelect=document.querySelector('#knowledge-base'), files=document.querySelector('#files'), fileInput=document.querySelector('#file');
-  let sessionId=null;
+  let sessionId=null, busy=false, sessionOffset=0, olderBefore=null;
+  const sessionList=document.querySelector('#session-list');
+  // localStorage 仅保存导航位置，完整消息以服务端数据库为准。
+  function rememberSession(id){try{localStorage.setItem('study-session',id)}catch{}}
+  function lastSession(){try{return localStorage.getItem('study-session')}catch{return null}}
+  function setBusy(value){busy=value;input.disabled=send.disabled=value;sessionList.disabled=value;document.querySelector('#new').disabled=value;kbSelect.disabled=value||!kbReady;document.querySelector('#allow-web').disabled=value}
+  let kbReady=false;
   // 转义所有外部文本，避免文件名、模型文本或错误消息被当作 HTML 执行。
   function escapeHtml(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
   // 渲染受限 Markdown：只支持代码块、换行和 HTTP(S) 链接。
@@ -50,8 +66,20 @@
   // 向聊天区域追加一条用户或助手消息。
   function add(role,text){document.querySelector('.empty')?.remove();const el=document.createElement('article');el.className=`msg ${role}`;el.innerHTML=render(text);messages.append(el);messages.scrollTop=messages.scrollHeight;return el}
   async function jsonRequest(url,options={}){const response=await fetch(url,options);if(!response.ok){let detail='请求失败';try{detail=(await response.json()).detail||detail}catch{}throw new Error(detail)}return response.status===204?null:response.json()}
-  // 创建新会话并清空当前聊天记录。
-  async function newSession(){const data=await jsonRequest('/api/sessions',{method:'POST'});sessionId=data.session_id;messages.innerHTML='<div class="empty">新会话已就绪。</div>'}
+  // 新建只改变当前导航，不删除旧会话。
+  async function newSession(){if(busy)return;const data=await jsonRequest('/api/sessions',{method:'POST'});await loadSessions();await openSession(data.session_id)}
+  // 分页列出历史会话，避免旧记录无法访问。
+  async function loadSessions(more=false){if(!more){sessionList.innerHTML='';sessionOffset=0}const list=await jsonRequest(`/api/sessions?limit=100&offset=${sessionOffset}`);for(const item of list){const option=document.createElement('option');option.value=item.id;option.textContent=item.title;sessionList.append(option)}sessionOffset+=list.length;document.querySelector('#more-sessions').hidden=list.length<100;if(sessionId)sessionList.value=sessionId}
+  // 失败或中断的问题仍显示，并允许重新发送。
+  function showTurn(turn){add('user',turn.question);if(turn.status==='complete'){add('assistant',turn.answer);return}const el=add('assistant',turn.status==='running'?'回答正在生成，可稍后重新打开会话查看。':turn.error);if(turn.status!=='running'){const retry=document.createElement('button');retry.textContent='重新发送';retry.onclick=()=>{if(!busy){input.value=turn.question;document.querySelector('#chat-form').requestSubmit()}};el.append(document.createElement('br'),retry)}}
+  function olderButton(){document.querySelector('#older-messages')?.remove();if(!olderBefore)return;const button=document.createElement('button');button.id='older-messages';button.textContent='加载更早记录';button.onclick=async()=>{try{const id=sessionId;const data=await jsonRequest(`/api/sessions/${id}?before=${olderBefore}`);if(id!==sessionId)return;const previous=[...messages.children].filter(el=>el!==button);messages.replaceChildren();for(const turn of data.turns)showTurn(turn);messages.append(...previous);olderBefore=data.next_before;olderButton()}catch(error){alert(error.message)}};messages.prepend(button)}
+  // 恢复原始消息和知识库选择；联网授权每次打开默认关闭。
+  async function openSession(id){if(busy)return;setBusy(true);try{const data=await jsonRequest(`/api/sessions/${id}`);sessionId=id;rememberSession(id);if(![...sessionList.options].some(o=>o.value===id)){const option=document.createElement('option');option.value=id;option.textContent=data.title;sessionList.prepend(option)}sessionList.value=id;messages.innerHTML='';for(const turn of data.turns)showTurn(turn);if(!data.turns.length)messages.innerHTML='<div class="empty">新会话已就绪。</div>';olderBefore=data.next_before;olderButton();document.querySelector('#session-summary').textContent=data.summary||'较早对话移出窗口后将生成摘要。';kbSelect.value=data.knowledge_base_id||'';document.querySelector('#allow-web').checked=false;if(kbReady)await loadFiles()}finally{setBusy(false)}}
+  // 记忆管理使用纯文本渲染，索引失败不伪装为已可召回。
+  async function loadMemories(){const data=await jsonRequest('/api/memories');document.querySelector('#memory-status').textContent=data.index_ready?'':'未配置 Embedding：原文可保存，自动召回尚未启用。';const list=document.querySelector('#memories');list.replaceChildren();for(const item of data.items){const li=document.createElement('li');const body=document.createElement('div');body.textContent=item.content;const meta=document.createElement('div');meta.className='hint';meta.textContent=`${item.scope==='global'?'全局':'知识库范围'} · ${item.status==='ready'?'可召回':'待索引'}`;const edit=document.createElement('button');edit.textContent=item.status==='ready'?'修改':'修改 / 重试';edit.onclick=async()=>{const content=prompt('长期记忆内容',item.content);if(!content?.trim())return;try{await jsonRequest(`/api/memories/${item.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,scope:item.scope})});await loadMemories()}catch(error){alert(error.message)}};const remove=document.createElement('button');remove.textContent='删除';remove.onclick=async()=>{if(confirm('删除这条长期记忆？原聊天记录仍保留。')){try{await jsonRequest(`/api/memories/${item.id}`,{method:'DELETE'});await loadMemories()}catch(error){alert(error.message)}}};li.append(body,meta,edit,remove);list.append(li)}}
+  document.querySelector('#add-memory').onclick=async()=>{const content=prompt('希望 Agent 长期记住什么？');if(!content?.trim())return;const scope=kbSelect.value&&confirm('仅在当前知识库中使用？取消则保存为全局记忆。')?`kb:${kbSelect.value}`:'global';try{await jsonRequest('/api/memories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,scope})});await loadMemories()}catch(error){alert(error.message)}};
+  sessionList.onchange=()=>openSession(sessionList.value).catch(error=>alert(error.message));
+  document.querySelector('#more-sessions').onclick=()=>loadSessions(true).catch(error=>alert(error.message));
   // 刷新知识库选择器，同时保留仍然存在的当前选择。
   async function loadKnowledgeBases(){const selected=kbSelect.value;const list=await jsonRequest('/api/knowledge-bases');kbSelect.innerHTML='<option value="">不使用知识库</option>';for(const kb of list){const option=document.createElement('option');option.value=kb.id;option.textContent=`${kb.name}（${kb.file_count} 个文件）`;kbSelect.append(option)}if([...kbSelect.options].some(item=>item.value===selected))kbSelect.value=selected;await loadFiles()}
   // 展示当前知识库文件状态，并提供失败重试和删除入口。
@@ -61,8 +89,9 @@
   document.querySelector('#delete-kb').onclick=async()=>{const kbId=kbSelect.value;if(kbId&&confirm('删除当前知识库及全部文件？')){await jsonRequest(`/api/knowledge-bases/${kbId}`,{method:'DELETE'});kbSelect.value='';await loadKnowledgeBases()}};
   kbSelect.onchange=loadFiles;
   // 提交问题并逐块解析 SSE 事件。
-  async function submit(event){event.preventDefault();const question=input.value.trim();if(!question)return;if(!sessionId)await newSession();add('user',question);input.value='';input.disabled=send.disabled=true;const status=document.createElement('div');status.className='status';messages.append(status);try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,message:question,knowledge_base_id:kbSelect.value||null,allow_web:document.querySelector('#allow-web').checked})});if(!response.ok){const data=await response.json();throw new Error(data.detail||'请求失败')}const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const blocks=buffer.split('\n\n');buffer=blocks.pop();for(const block of blocks){const eventName=block.match(/^event: (.+)$/m)?.[1],raw=block.match(/^data: (.+)$/m)?.[1];if(!raw)continue;const data=JSON.parse(raw);if(eventName==='status')status.textContent=data.message;if(eventName==='answer')add('assistant',data.answer);if(eventName==='error')add('assistant',`出错了：${data.message}`)}}}catch(error){add('assistant',`请求失败：${error.message}`)}finally{status.remove();input.disabled=send.disabled=false;input.focus()}}
-  document.querySelector('#chat-form').addEventListener('submit',submit);document.querySelector('#new').onclick=newSession;input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();document.querySelector('#chat-form').requestSubmit()}});
-  async function initialize(){await newSession();const health=await jsonRequest('/api/health');if(health.knowledge_base_ready){await loadKnowledgeBases();return}kbSelect.disabled=fileInput.disabled=document.querySelector('#upload').disabled=document.querySelector('#create-kb').disabled=document.querySelector('#delete-kb').disabled=true;document.querySelector('#kb-status').textContent=`知识库未启用：缺少 ${health.missing_embedding_fields.join('、')}。普通问答仍可使用。`}
+  async function submit(event){event.preventDefault();const question=input.value.trim();if(!question||busy)return;if(!sessionId)await newSession();add('user',question);input.value='';setBusy(true);const status=document.createElement('div');status.className='status';messages.append(status);try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,message:question,knowledge_base_id:kbSelect.value||null,allow_web:document.querySelector('#allow-web').checked})});if(!response.ok){const data=await response.json();throw new Error(data.detail||'请求失败')}const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const blocks=buffer.split('\n\n');buffer=blocks.pop();for(const block of blocks){const eventName=block.match(/^event: (.+)$/m)?.[1],raw=block.match(/^data: (.+)$/m)?.[1];if(!raw)continue;const data=JSON.parse(raw);if(eventName==='status')status.textContent=data.message;if(eventName==='answer')add('assistant',data.answer);if(eventName==='error')add('assistant',`出错了：${data.message}`)}}}catch(error){add('assistant',`请求失败：${error.message}`)}finally{status.remove();setBusy(false);await loadSessions().catch(()=>{});await loadMemories().catch(()=>{});try{const data=await jsonRequest(`/api/sessions/${sessionId}`);document.querySelector('#session-summary').textContent=data.summary||'暂无摘要'}catch{}input.focus()}}
+  document.querySelector('#chat-form').addEventListener('submit',submit);document.querySelector('#new').onclick=()=>newSession().catch(error=>alert(error.message));input.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();document.querySelector('#chat-form').requestSubmit()}});
+  async function initialize(){const health=await jsonRequest('/api/health');kbReady=health.knowledge_base_ready;if(kbReady){await loadKnowledgeBases()}else{kbSelect.disabled=fileInput.disabled=document.querySelector('#upload').disabled=document.querySelector('#create-kb').disabled=document.querySelector('#delete-kb').disabled=true;document.querySelector('#kb-status').textContent=`知识库未启用：缺少 ${health.missing_embedding_fields.join('、')}。普通问答仍可使用。`}await loadSessions();await loadMemories();const saved=lastSession();if(saved){try{await openSession(saved);return}catch{}}if(sessionList.options.length){await openSession(sessionList.options[0].value)}else{await newSession()}}
+
   initialize().catch(error=>add('assistant',`初始化失败：${error.message}`));
 </script></body></html>

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -19,12 +19,25 @@ from app.providers.embeddings import OpenAICompatibleEmbeddings
 from app.providers.model import OpenAICompatibleModel
 from app.providers.tavily import TavilyProvider
 from app.services.sessions import SessionStore
+from app.services.memory import MemoryIndex, SummaryModel
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 logger = logging.getLogger(__name__)
 settings = Settings.from_env()
-sessions = SessionStore()
+data_dir = Path(settings.data_dir)
+if not data_dir.is_absolute():
+    data_dir = (Path(__file__).resolve().parents[1] / data_dir).resolve()
+memory_index = MemoryIndex(
+    data_dir / "memory-chroma", OpenAICompatibleEmbeddings(settings), settings.memory_timeout_seconds,
+) if not settings.missing_embedding_fields else None
+sessions = SessionStore(
+    data_dir / "sessions.db",
+    summarizer=SummaryModel(OpenAICompatibleModel(settings)) if settings.model_ready else None,
+    memory_index=memory_index, window_turns=settings.memory_window_turns,
+    context_chars=settings.memory_context_chars, timeout=settings.memory_timeout_seconds,
+    task_timeout=settings.task_timeout_seconds,
+)
 
 
 def build_knowledge_base() -> KnowledgeBaseService | None:
@@ -72,7 +85,7 @@ def build_agent():
 
 
 agent = build_agent()
-app = FastAPI(title="Study Agent", version="0.2.0")
+app = FastAPI(title="Study Agent", version="0.3.0")
 
 
 class ChatRequest(BaseModel):
@@ -126,8 +139,71 @@ async def health() -> dict[str, Any]:
 
 @app.post("/api/sessions", status_code=201)
 async def create_session() -> dict[str, str]:
-    """创建一个重启后即清空的内存会话。"""
+    """创建重启后仍可恢复的持久化会话。"""
     return {"session_id": sessions.create()}
+
+
+@app.get("/api/sessions")
+async def list_sessions(limit: int = Query(100, ge=1, le=100), offset: int = Query(0, ge=0)) -> list[dict]:
+    """分页列出历史会话。"""
+    return sessions.list_sessions(limit, offset)
+
+
+@app.get("/api/sessions/{session_id}")
+async def session_detail(session_id: str, before: int | None = Query(None, ge=1),
+                         limit: int = Query(100, ge=1, le=100)) -> dict:
+    """返回会话配置、摘要和可分页的完整聊天记录。"""
+    try:
+        return sessions.detail(session_id, before=before, limit=limit)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+
+
+class MemoryRequest(BaseModel):
+    """用户主动保存或更新的长期记忆；默认属于本地用户全局范围。"""
+
+    content: str = Field(min_length=1, max_length=2000)
+    scope: str = Field(default="global", max_length=200)
+
+
+@app.get("/api/memories")
+async def list_memories() -> dict:
+    """返回记忆原文及索引可用性，配置缺失时仍可管理原文。"""
+    return {"index_ready": sessions.memory_index is not None, "items": sessions.list_memories()}
+
+
+async def _save_memory(request: MemoryRequest, memory_id: str | None = None) -> dict:
+    """把记忆业务错误转换成 HTTP 错误，并校验知识库范围。"""
+    try:
+        if request.scope.startswith("kb:"):
+            _require_knowledge_bases().list_files(request.scope[3:])
+        return await sessions.save_memory(request.content, request.scope, memory_id=memory_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+
+
+@app.post("/api/memories", status_code=201)
+async def create_memory(request: MemoryRequest) -> dict:
+    """保存用户确认的长期记忆，索引失败时保留 pending 状态供重试。"""
+    return await _save_memory(request)
+
+
+@app.put("/api/memories/{memory_id}")
+async def update_memory(memory_id: str, request: MemoryRequest) -> dict:
+    """修改原记忆或重试索引，不创建重复条目。"""
+    return await _save_memory(request, memory_id)
+
+
+@app.delete("/api/memories/{memory_id}", status_code=204)
+async def delete_memory(memory_id: str) -> Response:
+    """使长期记忆失效并清理向量，不删除原始聊天记录。"""
+    try:
+        await sessions.delete_memory(memory_id)
+    except KeyError as exc:
+        raise HTTPException(404, detail=str(exc).strip("'")) from exc
+    return Response(status_code=204)
 
 
 def _require_knowledge_bases() -> KnowledgeBaseService:
@@ -220,8 +296,6 @@ def _sse(event: str, data: Any) -> str:
 @app.post("/api/chat")
 async def chat(request: ChatRequest) -> StreamingResponse:
     """启动聊天任务并以 SSE 返回进度、回答、错误和结束事件。"""
-    if agent is None:
-        raise HTTPException(503, detail=f"模型配置不完整：{', '.join(settings.missing_model_fields)}")
     if sessions.get(request.session_id) is None:
         raise HTTPException(404, detail="会话不存在，请新建会话")
 

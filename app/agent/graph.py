@@ -237,7 +237,8 @@ class StudyAgent:
         task_id = str(uuid4())
         initial: AgentState = {
             "task_id": task_id,
-            "messages": [*history[-12:], HumanMessage(content=question)],
+            # 会话模块已经限制窗口与总字符预算，不再截掉前置摘要和长期记忆。
+            "messages": [*history, HumanMessage(content=question)],
             "search_results": {},
             "sources": {},
             "search_rounds": 0,
