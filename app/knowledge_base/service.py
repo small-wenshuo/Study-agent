@@ -302,19 +302,55 @@ class KnowledgeBaseService:
         data = await asyncio.to_thread(path.read_bytes)
         return await self._process_file(file_id, knowledge_base_id, str(row["filename"]), data)
 
-    async def search(self, knowledge_base_id: str, query: str, limit: int = 8) -> list[RetrievalHit]:
+    def file_info(self, knowledge_base_id: str, file_id: str) -> dict[str, object]:
+        """公开的文件归属查询，不让论文服务访问私有数据库或内部路径。"""
+        self._require_knowledge_base(knowledge_base_id)
+        with self._lock:
+            row = self._connection.execute('SELECT * FROM files WHERE id=? AND knowledge_base_id=?',
+                                           (file_id, knowledge_base_id)).fetchone()
+        if row is None:
+            raise KeyError('文件不存在。')
+        return self._public_file(row)
+
+    def read_file(self, knowledge_base_id: str, file_id: str) -> tuple[dict, bytes]:
+        """从受控上传目录读取指定 PDF；对客户端只返回公开文件信息。"""
+        info = self.file_info(knowledge_base_id, file_id)
+        if info['file_type'] != 'pdf':
+            raise ValueError('论文模式仅支持 PDF。')
+        with self._lock:
+            row = self._connection.execute('SELECT stored_path FROM files WHERE id=? AND knowledge_base_id=?',
+                                           (file_id, knowledge_base_id)).fetchone()
+        if row is None:
+            raise KeyError('文件不存在。')
+        path = Path(row['stored_path']).resolve()
+        if path.parent != self._storage_dir or not path.is_file():
+            raise KeyError('原文件不存在。')
+        with path.open('rb') as stream:
+            data = stream.read(self._max_file_bytes + 1)
+        if not data or len(data) > self._max_file_bytes:
+            raise ValueError('原文件为空或超过大小限制。')
+        return info, data
+
+    async def search(self, knowledge_base_id: str, query: str, limit: int = 8,
+                     *, file_id: str | None = None) -> list[RetrievalHit]:
         """向量化问题并在单一知识库内检索证据。"""
         self._require_knowledge_base(knowledge_base_id)
+        if file_id is not None:
+            self.file_info(knowledge_base_id, file_id)
         clean_query = query.strip()
         if not clean_query:
             raise ValueError("检索问题不能为空")
         embedding = await asyncio.wait_for(
             self._embeddings.embed_query(clean_query), timeout=self._processing_timeout
         )
+        search_args = {'file_id': file_id} if file_id is not None else {}
         candidates = await asyncio.wait_for(
-            asyncio.to_thread(self._vectors.search, embedding, knowledge_base_id, max(limit * 2, limit)),
+            asyncio.to_thread(self._vectors.search, embedding, knowledge_base_id, max(limit * 2, limit), **search_args),
             timeout=self._processing_timeout,
         )
+        if file_id is not None:
+            candidates = [item for item in candidates if item.metadata.get('file_id') == file_id
+                          and item.metadata.get('knowledge_base_id') == knowledge_base_id]
         matches = self._reranker.rerank(clean_query, candidates, limit)
         return [
             RetrievalHit(f"K{index}", match.content, match.metadata, match.score)

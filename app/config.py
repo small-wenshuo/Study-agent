@@ -50,6 +50,13 @@ class Settings:
     memory_window_turns: int = 6
     memory_context_chars: int = 24000
     memory_timeout_seconds: int = 30
+    paper_task_timeout_seconds: int = 600
+    paper_max_batches: int = 24
+    paper_batch_chars: int = 12000
+    paper_input_chars: int = 24000
+    paper_max_model_calls: int = 40
+    paper_active_tasks: int = 1
+    paper_queue_capacity: int = 5
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -78,6 +85,13 @@ class Settings:
             memory_window_turns=_integer("MEMORY_WINDOW_TURNS", 6, 1),
             memory_context_chars=_integer("MEMORY_CONTEXT_CHARS", 24000, 16000),
             memory_timeout_seconds=_integer("MEMORY_TIMEOUT_SECONDS", 30, 1),
+            paper_task_timeout_seconds=_integer("PAPER_TASK_TIMEOUT_SECONDS", 600, 1),
+            paper_max_batches=_integer("PAPER_MAX_BATCHES", 24, 1),
+            paper_batch_chars=_integer("PAPER_BATCH_CHARS", 12000, 8000),
+            paper_input_chars=_integer("PAPER_INPUT_CHARS", 24000, 16000),
+            paper_max_model_calls=_integer("PAPER_MAX_MODEL_CALLS", 40, 8),
+            paper_active_tasks=_integer("PAPER_ACTIVE_TASKS", 1, 1),
+            paper_queue_capacity=_integer("PAPER_QUEUE_CAPACITY", 5, 0),
         )
 
     @property

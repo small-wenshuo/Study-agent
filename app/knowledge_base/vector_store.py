@@ -38,7 +38,8 @@ class VectorStore(Protocol):
         """新向量写入成功后再删除同一文件的旧 Chunk。"""
         ...
 
-    def search(self, embedding: list[float], knowledge_base_id: str, limit: int) -> list[VectorMatch]:
+    def search(self, embedding: list[float], knowledge_base_id: str, limit: int,
+               *, file_id: str | None = None) -> list[VectorMatch]:
         """在指定知识库内检索最相关 Chunk。"""
         ...
 
@@ -95,7 +96,8 @@ class ChromaVectorStore:
         if existing:
             self._collection.delete(ids=[str(item) for item in existing])
 
-    def search(self, embedding: list[float], knowledge_base_id: str, limit: int) -> list[VectorMatch]:
+    def search(self, embedding: list[float], knowledge_base_id: str, limit: int,
+               *, file_id: str | None = None) -> list[VectorMatch]:
         """用知识库过滤条件执行余弦向量检索。"""
         count = self._collection.count()
         if not count:
@@ -103,7 +105,8 @@ class ChromaVectorStore:
         result = self._collection.query(
             query_embeddings=[embedding],
             n_results=min(max(1, limit), count),
-            where={"knowledge_base_id": knowledge_base_id},
+            where=({"$and": [{"knowledge_base_id": knowledge_base_id}, {"file_id": file_id}]}
+                   if file_id is not None else {"knowledge_base_id": knowledge_base_id}),
             include=["documents", "metadatas", "distances"],
         )
         ids = result.get("ids", [[]])[0]

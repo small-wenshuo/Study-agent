@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from app.providers.model import OpenAICompatibleModel
 from app.providers.tavily import TavilyProvider
 from app.services.sessions import SessionStore
 from app.services.memory import MemoryIndex, SummaryModel
+from app.papers.service import PaperService
+from app.papers.api import create_router, business_errors
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -85,7 +88,22 @@ def build_agent():
 
 
 agent = build_agent()
-app = FastAPI(title="Study Agent", version="0.3.0")
+
+
+@asynccontextmanager
+async def lifespan(application):
+    """关闭前中断论文任务，生命周期不触发自动生成。"""
+    yield
+    await papers.close()
+
+
+app = FastAPI(title="Study Agent", version="0.4.0", lifespan=lifespan)
+papers = PaperService(
+    settings, data_dir, lambda: sessions, lambda: knowledge_bases,
+    OpenAICompatibleModel(settings) if settings.model_ready else None,
+    TavilyProvider(settings.tavily_api_key, settings.tool_timeout_seconds) if settings.search_ready else None,
+)
+app.include_router(create_router(lambda: papers))
 
 
 class ChatRequest(BaseModel):
@@ -123,6 +141,12 @@ class KnowledgeBaseCreate(BaseModel):
 async def index() -> FileResponse:
     """返回无需构建步骤的聊天网页。"""
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/paper.js")
+async def paper_script() -> FileResponse:
+    """只公开指定论文界面脚本，不暴露任意服务器路径。"""
+    return FileResponse(STATIC_DIR / "paper.js", media_type="application/javascript")
 
 
 @app.get("/api/health")
@@ -232,6 +256,8 @@ async def list_knowledge_bases() -> list[dict[str, object]]:
 async def delete_knowledge_base(knowledge_base_id: str) -> Response:
     """删除知识库、原文件和全部索引。"""
     try:
+        for file in _require_knowledge_bases().list_files(knowledge_base_id):
+            await papers.invalidate_file(knowledge_base_id, str(file['id']), delete=True)
         _require_knowledge_bases().delete_knowledge_base(knowledge_base_id)
     except KeyError as exc:
         raise HTTPException(404, detail=str(exc).strip("'")) from exc
@@ -271,6 +297,7 @@ async def upload_knowledge_base_file(
 async def delete_knowledge_base_file(knowledge_base_id: str, file_id: str) -> Response:
     """删除一个文件及其全部向量。"""
     try:
+        await papers.invalidate_file(knowledge_base_id, file_id, delete=True)
         _require_knowledge_bases().delete_file(knowledge_base_id, file_id)
     except KeyError as exc:
         raise HTTPException(404, detail=str(exc).strip("'")) from exc
@@ -281,6 +308,7 @@ async def delete_knowledge_base_file(knowledge_base_id: str, file_id: str) -> Re
 async def retry_knowledge_base_file(knowledge_base_id: str, file_id: str) -> dict[str, object]:
     """使用原文件重试失败的解析或重新构建索引。"""
     try:
+        await papers.invalidate_file(knowledge_base_id, file_id, delete=False)
         return await _require_knowledge_bases().retry_file(knowledge_base_id, file_id)
     except KeyError as exc:
         raise HTTPException(404, detail=str(exc).strip("'")) from exc
@@ -298,6 +326,19 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     """启动聊天任务并以 SSE 返回进度、回答、错误和结束事件。"""
     if sessions.get(request.session_id) is None:
         raise HTTPException(404, detail="会话不存在，请新建会话")
+    # 模式开启时只处理本次论文追问，默认关闭完全保留旧问答路径。
+    mode = sessions.detail(request.session_id, limit=1)
+    if mode['paper_mode']:
+        with business_errors():
+            if not mode['paper_study_id']:
+                raise HTTPException(409, '请先选择一篇论文。')
+            task = papers.generate(mode['paper_study_id'], request.session_id, mode['paper_mode_revision'],
+                                   'explanation', {'question': request.message.strip(), 'allow_web': request.allow_web})
+        async def paper_stream():
+            """返回学习任务标识，任务生命周期独立于浏览器连接。"""
+            yield _sse('paper_task', {'task_id': task['id']})
+            yield _sse('done', {})
+        return StreamingResponse(paper_stream(), media_type='text/event-stream')
 
     async def stream():
         """桥接后台 Agent 任务与 HTTP 流，并处理客户端断开。"""

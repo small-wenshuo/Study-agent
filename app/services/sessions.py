@@ -65,6 +65,32 @@ class SessionStore:
                 );
                 UPDATE turns SET status='interrupted', error='服务重启，回答已中断' WHERE status='running';
             ''')
+            # 增量迁移不覆盖历史会话；新旧会话均默认关闭论文模式。
+            columns = {row['name'] for row in self._db.execute('PRAGMA table_info(sessions)')}
+            for name, definition in (('paper_mode', 'INTEGER NOT NULL DEFAULT 0'),
+                                     ('paper_study_id', 'TEXT'),
+                                     ('paper_mode_revision', 'INTEGER NOT NULL DEFAULT 0')):
+                if name not in columns:
+                    self._db.execute(f'ALTER TABLE sessions ADD COLUMN {name} {definition}')
+
+    def set_paper_mode(self, session_id: str, enabled: bool, study_id: str | None, expected_revision: int,
+                       *, knowledge_base_id: str | None = None) -> dict:
+        """只通过明确用户操作更新模式，以版本号阻止其他窗口的迟到设置。"""
+        with self._mutex, self._db:
+            cursor = self._db.execute(
+                'UPDATE sessions SET paper_mode=?,paper_study_id=?,paper_mode_revision=paper_mode_revision+1,'
+                'knowledge_base_id=COALESCE(?,knowledge_base_id) '
+                'WHERE id=? AND paper_mode_revision=?', (int(enabled), study_id, knowledge_base_id, session_id, expected_revision))
+            if not cursor.rowcount:
+                self.detail(session_id, limit=1)
+                raise RuntimeError('论文模式版本冲突，请刷新。')
+        return self.detail(session_id, limit=1)
+
+    def disable_paper_study(self, study_id: str):
+        """来源删除或重试时使关联会话模式失效，保留其他学习会话。"""
+        with self._mutex, self._db:
+            self._db.execute('UPDATE sessions SET paper_mode=0,paper_study_id=NULL,'
+                             'paper_mode_revision=paper_mode_revision+1 WHERE paper_study_id=?', (study_id,))
 
     @staticmethod
     def _now() -> str:
