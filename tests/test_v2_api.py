@@ -10,6 +10,7 @@ import httpx
 import app.main as main_module
 from app.knowledge_base import ChromaVectorStore, KnowledgeBaseService
 from app.parsers import ParserRegistry
+from tests.auth_support import install_auth, login_admin
 
 
 class ApiEmbeddings:
@@ -53,14 +54,18 @@ class V2ApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.patch = patch.object(main_module, "knowledge_bases", self.service)
         self.patch.start()
+        self.auth_store, self.auth_patch = install_auth(main_module, root)
         self.client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=main_module.app), base_url="http://test"
+            transport=httpx.ASGITransport(app=main_module.app), base_url="https://test"
         )
+        await login_admin(self.client)
 
     async def asyncTearDown(self) -> None:
         """关闭客户端与持久化句柄。"""
         await self.client.aclose()
         self.patch.stop()
+        self.auth_patch.stop()
+        self.auth_store.close()
         self.service.close()
         self.temp.cleanup()
 
@@ -101,6 +106,7 @@ class V2ApiTests(unittest.IsolatedAsyncioTestCase):
         """聊天接口应把当前知识库和联网授权交给 V2 Agent。"""
         agent = ContextCapturingAgent()
         session_id = (await self.client.post("/api/sessions")).json()["session_id"]
+        kb_id = (await self.client.post('/api/knowledge-bases', json={'name': '测试知识库'})).json()['id']
 
         with patch.object(main_module, "agent", agent):
             response = await self.client.post(
@@ -108,14 +114,14 @@ class V2ApiTests(unittest.IsolatedAsyncioTestCase):
                 json={
                     "session_id": session_id,
                     "message": "解释资料",
-                    "knowledge_base_id": "kb-selected",
+                    "knowledge_base_id": kb_id,
                     "allow_web": True,
                 },
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("event: answer", response.text)
-        self.assertEqual(agent.context, ("解释资料", "kb-selected", True))
+        self.assertEqual(agent.context, ("解释资料", kb_id, True))
 
 
 if __name__ == "__main__":

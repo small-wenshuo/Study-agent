@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from app.agent.graph import ProgressCallback
+from app.auth import LEGACY_ADMIN_ID, current_user_id, owner_for_new_record
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,15 @@ class SessionStore:
             columns = {row['name'] for row in self._db.execute('PRAGMA table_info(sessions)')}
             for name, definition in (('paper_mode', 'INTEGER NOT NULL DEFAULT 0'),
                                      ('paper_study_id', 'TEXT'),
-                                     ('paper_mode_revision', 'INTEGER NOT NULL DEFAULT 0')):
+                                     ('paper_mode_revision', 'INTEGER NOT NULL DEFAULT 0'),
+                                     ('owner_id', f"TEXT NOT NULL DEFAULT '{LEGACY_ADMIN_ID}'")):
                 if name not in columns:
                     self._db.execute(f'ALTER TABLE sessions ADD COLUMN {name} {definition}')
+            memory_columns = {row['name'] for row in self._db.execute('PRAGMA table_info(memories)')}
+            if 'owner_id' not in memory_columns:
+                self._db.execute(f"ALTER TABLE memories ADD COLUMN owner_id TEXT NOT NULL DEFAULT '{LEGACY_ADMIN_ID}'")
+            self._db.execute('CREATE INDEX IF NOT EXISTS sessions_owner_updated ON sessions(owner_id,updated_at)')
+            self._db.execute('CREATE INDEX IF NOT EXISTS memories_owner_updated ON memories(owner_id,updated_at)')
 
     def set_paper_mode(self, session_id: str, enabled: bool, study_id: str | None, expected_revision: int,
                        *, knowledge_base_id: str | None = None) -> dict:
@@ -80,7 +87,8 @@ class SessionStore:
             cursor = self._db.execute(
                 'UPDATE sessions SET paper_mode=?,paper_study_id=?,paper_mode_revision=paper_mode_revision+1,'
                 'knowledge_base_id=COALESCE(?,knowledge_base_id) '
-                'WHERE id=? AND paper_mode_revision=?', (int(enabled), study_id, knowledge_base_id, session_id, expected_revision))
+                'WHERE id=? AND paper_mode_revision=? AND owner_id=?',
+                (int(enabled), study_id, knowledge_base_id, session_id, expected_revision, owner_for_new_record()))
             if not cursor.rowcount:
                 self.detail(session_id, limit=1)
                 raise RuntimeError('论文模式版本冲突，请刷新。')
@@ -90,7 +98,8 @@ class SessionStore:
         """来源删除或重试时使关联会话模式失效，保留其他学习会话。"""
         with self._mutex, self._db:
             self._db.execute('UPDATE sessions SET paper_mode=0,paper_study_id=NULL,'
-                             'paper_mode_revision=paper_mode_revision+1 WHERE paper_study_id=?', (study_id,))
+                             'paper_mode_revision=paper_mode_revision+1 WHERE paper_study_id=? AND owner_id=?',
+                             (study_id, owner_for_new_record()))
 
     @staticmethod
     def _now() -> str:
@@ -101,21 +110,23 @@ class SessionStore:
         """立即保存空会话，使刷新和重启后仍可恢复。"""
         key, now = str(uuid4()), self._now()
         with self._mutex, self._db:
-            self._db.execute('INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)',
-                             (key, '新会话', now, now))
+            self._db.execute('INSERT INTO sessions(id,title,created_at,updated_at,owner_id) VALUES(?,?,?,?,?)',
+                             (key, '新会话', now, now, owner_for_new_record()))
         return key
 
     def list_sessions(self, limit: int = 100, offset: int = 0) -> list[dict]:
         """分页列出会话，不读取消息正文。"""
         with self._mutex:
             return [dict(row) for row in self._db.execute(
-                'SELECT id,title,created_at,updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?',
-                (limit, offset))]
+                'SELECT id,title,created_at,updated_at FROM sessions WHERE owner_id=? '
+                'ORDER BY updated_at DESC LIMIT ? OFFSET ?',
+                (owner_for_new_record(), limit, offset))]
 
     def detail(self, session_id: str, *, before: int | None = None, limit: int = 100) -> dict:
         """按轮次分页读取完整原文和执行状态。"""
         with self._mutex:
-            row = self._db.execute('SELECT * FROM sessions WHERE id=?', (session_id,)).fetchone()
+            row = self._db.execute('SELECT * FROM sessions WHERE id=? AND owner_id=?',
+                                   (session_id, owner_for_new_record())).fetchone()
             if row is None:
                 raise KeyError('会话不存在，请新建会话')
             turns = [dict(item) for item in self._db.execute(
@@ -141,7 +152,8 @@ class SessionStore:
     def get(self, session_id: str) -> Session | None:
         """恢复近期视图并复用锁，不把完整记录放入内存缓存。"""
         with self._mutex:
-            if not self._db.execute('SELECT 1 FROM sessions WHERE id=?', (session_id,)).fetchone():
+            if not self._db.execute('SELECT 1 FROM sessions WHERE id=? AND owner_id=?',
+                                    (session_id, owner_for_new_record())).fetchone():
                 return None
             session = self._sessions.setdefault(session_id, Session())
             session.messages = self._messages(self._recent(session_id))
@@ -200,8 +212,8 @@ class SessionStore:
                 with self._mutex:
                     for hit in hits:
                         row = self._db.execute(
-                            "SELECT * FROM memories WHERE id=? AND revision=? AND status='ready'",
-                            (hit['id'], hit['revision'])).fetchone()
+                            "SELECT * FROM memories WHERE id=? AND revision=? AND status='ready' AND owner_id=?",
+                            (hit['id'], hit['revision'], owner_for_new_record())).fetchone()
                         if row and row['scope'] in {'global', scope}:
                             item = {'内容': row['content'], '更新时间': row['updated_at']}
                             # 对序列化后长度计费，特殊字符不能绕过模型输入预算。
@@ -243,7 +255,8 @@ class SessionStore:
         """列出长期记忆及索引状态，便于用户管理和重试。"""
         with self._mutex:
             return [dict(row) for row in self._db.execute(
-                "SELECT * FROM memories WHERE status!='deleted' ORDER BY updated_at DESC")]
+                "SELECT * FROM memories WHERE status!='deleted' AND owner_id=? ORDER BY updated_at DESC",
+                (owner_for_new_record(),))]
 
     async def save_memory(self, content: str, scope: str = 'global', *, memory_id: str | None = None,
                           source_session_id: str | None = None, source_turn_id: int | None = None) -> dict:
@@ -253,12 +266,14 @@ class SessionStore:
             raise ValueError('长期记忆长度必须为 1～2000 个字符')
         if scope != 'global' and (not scope.startswith('kb:') or len(scope) <= 3 or len(scope) > 200):
             raise ValueError('记忆范围必须为 global 或 kb:知识库ID')
+        if source_session_id:
+            self.detail(source_session_id, limit=1)
         async with self._memory_lock:
             now, revision = self._now(), str(uuid4())
             with self._mutex, self._db:
                 if memory_id:
-                    existing = self._db.execute("SELECT * FROM memories WHERE id=? AND status!='deleted'",
-                                                (memory_id,)).fetchone()
+                    existing = self._db.execute("SELECT * FROM memories WHERE id=? AND status!='deleted' AND owner_id=?",
+                                                (memory_id, owner_for_new_record())).fetchone()
                     if not existing:
                         raise KeyError('长期记忆不存在')
                     self._db.execute(
@@ -266,9 +281,11 @@ class SessionStore:
                         (content, scope, revision, now, memory_id))
                 else:
                     memory_id = str(uuid4())
-                    self._db.execute('INSERT INTO memories VALUES(?,?,?,?,?,?,?,?,?)',
+                    self._db.execute('INSERT INTO memories '
+                                     '(id,content,scope,source_session_id,source_turn_id,revision,status,created_at,updated_at,owner_id) '
+                                     'VALUES(?,?,?,?,?,?,?,?,?,?)',
                                      (memory_id, content, scope, source_session_id, source_turn_id,
-                                      revision, 'pending', now, now))
+                                      revision, 'pending', now, now, owner_for_new_record()))
                 memory = dict(self._db.execute('SELECT * FROM memories WHERE id=?', (memory_id,)).fetchone())
             if self.memory_index:
                 try:
@@ -285,8 +302,9 @@ class SessionStore:
         """先使记忆失效再清理向量，清理失败也不会继续召回该记忆。"""
         async with self._memory_lock:
             with self._mutex, self._db:
-                changed = self._db.execute("UPDATE memories SET status='deleted',content='' WHERE id=? AND status!='deleted'",
-                                           (memory_id,)).rowcount
+                changed = self._db.execute("UPDATE memories SET status='deleted',content='' "
+                                           "WHERE id=? AND status!='deleted' AND owner_id=?",
+                                           (memory_id, owner_for_new_record())).rowcount
                 if not changed:
                     raise KeyError('长期记忆不存在')
             if self.memory_index:

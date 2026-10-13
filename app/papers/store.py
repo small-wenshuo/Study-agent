@@ -17,9 +17,10 @@ def now() -> str:
 class LearningStore:
     """独立学习数据库，不读取知识库或会话服务的私有表。"""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, authorize_study=None):
         """兼容建表并把上次进程遗留任务标为中断。"""
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.authorize_study = authorize_study
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
@@ -87,10 +88,14 @@ class LearningStore:
 
     def study(self, study_id: str) -> dict:
         """获取学习记录及对应资源归属。"""
-        return self.one('SELECT * FROM paper_studies WHERE id=?', (study_id,))
+        value = self.one('SELECT * FROM paper_studies WHERE id=?', (study_id,))
+        if self.authorize_study:
+            self.authorize_study(study_id, value)
+        return value
 
     def snapshot(self, snapshot_id: str, study_id: str) -> dict:
         """快照身份由文件内容确定，查询时严格限定学习记录。"""
+        self.study(study_id)
         row = self.one('SELECT payload FROM paper_snapshots WHERE id=? AND study_id=?', (snapshot_id, study_id))
         return json.loads(row['payload'])
 
@@ -107,6 +112,7 @@ class LearningStore:
     def artifact(self, artifact_id: str) -> dict:
         """读取结构化产物及本次实际证据。"""
         row = self.one('SELECT * FROM artifacts WHERE id=?', (artifact_id,))
+        self.study(row['study_id'])
         payload = json.loads(row.pop('payload'))
         return {**row, **payload}
 
@@ -142,6 +148,7 @@ class LearningStore:
     def task(self, task_id: str) -> dict:
         """获取安全的任务状态和公开输入。"""
         row = self.one('SELECT * FROM tasks WHERE id=?', (task_id,))
+        self.study(row['study_id'])
         row['input'] = json.loads(row.pop('input_json'))
         return row
 
@@ -174,6 +181,7 @@ class LearningStore:
     def note(self, note_id: str, revision: int | None = None) -> dict:
         """读取当前或指定的不可变笔记版本。"""
         row = self.one('SELECT * FROM notes WHERE id=?', (note_id,))
+        self.study(row['study_id'])
         revision = revision or row['revision']
         version = self.one('SELECT payload FROM note_versions WHERE note_id=? AND revision=?', (note_id, revision))
         payload = json.loads(version['payload'])

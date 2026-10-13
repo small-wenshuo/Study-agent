@@ -22,6 +22,7 @@ from app.papers.reader import read_pdf
 from app.papers.service import PaperService
 from app.services.sessions import SessionStore
 from app.services.tasks import TaskConflict, TaskCapacityError, TERMINAL
+from tests.auth_support import install_auth, login_admin
 
 
 def pdf_bytes(texts=('Problem: efficient learning. Method: staged reading. Result: accuracy is 91 percent.',)):
@@ -321,8 +322,11 @@ class PaperTests(unittest.IsolatedAsyncioTestCase):
             async def run(self, history, question, progress=None, **kwargs):
                 """返回固定文本，不调用论文模型。"""
                 return '普通问答'
-        with patch.object(main, 'papers', self.service), patch.object(main, 'sessions', self.sessions), patch.object(main, 'agent', OrdinaryAgent()):
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='http://test') as client:
+        auth_store, auth_patch = install_auth(main, self.root)
+        try:
+          with patch.object(main, 'papers', self.service), patch.object(main, 'sessions', self.sessions), patch.object(main, 'agent', OrdinaryAgent()):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url='https://test') as client:
+                await login_admin(client)
                 response = await client.post('/api/chat', json={'session_id': self.session, 'message': '聊聊论文'})
                 self.assertIn('普通问答', response.text)
                 self.assertEqual(self.model.calls, 0)
@@ -345,6 +349,9 @@ class PaperTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('PDF 第 1 页', exported.text)
                 explained = await client.post('/api/chat', json={'session_id':self.session, 'message':'解释方法'})
                 self.assertIn('event: paper_task', explained.text)
+        finally:
+            auth_patch.stop()
+            auth_store.close()
 
 
 class ReaderAndMigrationTests(unittest.TestCase):

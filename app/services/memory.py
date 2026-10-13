@@ -8,6 +8,7 @@ import chromadb
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.providers.model import ModelClient
+from app.auth import LEGACY_ADMIN_ID, owner_for_new_record
 
 
 class SummaryModel:
@@ -44,28 +45,38 @@ class MemoryIndex:
         self.client = chromadb.PersistentClient(path=str(path))
         self.collection = self.client.get_or_create_collection(
             "study_agent_memories", metadata={"hnsw:space": "cosine"})
+        self._collections = {LEGACY_ADMIN_ID: self.collection}
+
+    def _for_owner(self, owner_id: str):
+        """旧管理员继续使用原集合，新账号使用各自独立的向量集合。"""
+        if owner_id not in self._collections:
+            self._collections[owner_id] = self.client.get_or_create_collection(
+                f'study_agent_memories_{owner_id}', metadata={"hnsw:space": "cosine"})
+        return self._collections[owner_id]
 
     async def upsert(self, memory: dict) -> None:
         """写入版本标识，调用方可排除超时任务遗留的旧向量。"""
         vector = await asyncio.wait_for(self.embeddings.embed_query(memory["content"]), self.timeout)
-        await asyncio.to_thread(self.collection.upsert, ids=[memory["id"]], documents=[memory["content"]],
+        collection = self._for_owner(memory.get('owner_id', LEGACY_ADMIN_ID))
+        await asyncio.to_thread(collection.upsert, ids=[memory["id"]], documents=[memory["content"]],
                                 embeddings=[vector], metadatas=[{"scope": memory["scope"], "revision": memory["revision"]}])
 
     async def search(self, query: str, scope: str, limit: int = 5) -> list[dict]:
         """按范围和余弦距离筛选相关记忆，最多返回五条。"""
-        count = await asyncio.to_thread(self.collection.count)
+        collection = self._for_owner(owner_for_new_record())
+        count = await asyncio.to_thread(collection.count)
         if not count:
             return []
         vector = await asyncio.wait_for(self.embeddings.embed_query(query), self.timeout)
         where = {"scope": "global"} if scope == "global" else {"scope": {"$in": ["global", scope]}}
-        result = await asyncio.to_thread(self.collection.query, query_embeddings=[vector], where=where,
+        result = await asyncio.to_thread(collection.query, query_embeddings=[vector], where=where,
                                         n_results=min(limit, count), include=["metadatas", "distances"])
         return [{"id": key, "revision": meta["revision"]} for key, meta, distance in zip(
             result["ids"][0], result["metadatas"][0], result["distances"][0], strict=True) if distance <= 0.65]
 
     async def delete(self, memory_id: str) -> None:
         """清除对应向量；原文先失效，避免清理失败后继续使用。"""
-        await asyncio.to_thread(self.collection.delete, ids=[memory_id])
+        await asyncio.to_thread(self._for_owner(owner_for_new_record()).delete, ids=[memory_id])
 
     def close(self) -> None:
         """释放向量客户端资源。"""

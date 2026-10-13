@@ -22,7 +22,7 @@ class PaperService:
         """依赖使用 getter，方便测试隔离并避免复制数据库业务。"""
         self.settings, self.data_dir = settings, data_dir
         self.sessions, self.knowledge = sessions, knowledge
-        self.store = LearningStore(data_dir / 'paper-learning.db')
+        self.store = LearningStore(data_dir / 'paper-learning.db', self.authorize_study)
         self.model = PaperModel(model, settings)
         self.web = web
         self.tasks = TaskManager(self.store, settings, self.valid)
@@ -34,6 +34,10 @@ class PaperService:
         if value is None:
             raise RuntimeError('知识库未启用，请配置 Embedding 并上传论文。')
         return value
+
+    def authorize_study(self, study_id: str, row: dict):
+        """学习任务、产物和笔记统一继承所属知识库的账号边界。"""
+        self.kb().file_info(row['knowledge_base_id'], row['file_id'])
 
     def create_study(self, kb_id: str, file_id: str) -> dict:
         """检查文件类型和归属；创建记录不会触发全文或模型调用。"""
@@ -403,6 +407,7 @@ class PaperService:
 
     async def invalidate_file(self, kb_id: str, file_id: str, delete: bool):
         """文件删除/重试先取消学习任务，等待收尾后再清理来源。"""
+        self.kb().file_info(kb_id, file_id)
         rows = self.store.many('SELECT id FROM paper_studies WHERE knowledge_base_id=? AND file_id=?', (kb_id, file_id))
         for row in rows:
             task_rows = self.store.many("SELECT id FROM tasks WHERE study_id=? AND status IN ('queued','running')", (row['id'],))

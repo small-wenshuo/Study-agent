@@ -11,6 +11,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from app.knowledge_base.vector_store import VectorRecord, VectorStore
+from app.auth import LEGACY_ADMIN_ID, owner_for_new_record
 from app.parsers import Document, ParseError, ParserRegistry
 from app.retrieval import HybridReranker
 
@@ -109,6 +110,12 @@ class KnowledgeBaseService:
                 CREATE INDEX IF NOT EXISTS files_knowledge_base_idx ON files(knowledge_base_id);
                 """
             )
+            # 旧资料没有创建者；只归首次管理员，不会分配给新账号。
+            columns = {row['name'] for row in self._connection.execute('PRAGMA table_info(knowledge_bases)')}
+            if 'owner_id' not in columns:
+                self._connection.execute(
+                    f"ALTER TABLE knowledge_bases ADD COLUMN owner_id TEXT NOT NULL DEFAULT '{LEGACY_ADMIN_ID}'")
+            self._connection.execute('CREATE INDEX IF NOT EXISTS knowledge_bases_owner ON knowledge_bases(owner_id)')
 
     @staticmethod
     def _now() -> str:
@@ -137,8 +144,8 @@ class KnowledgeBaseService:
         record = {"id": str(uuid4()), "name": clean_name, "created_at": self._now()}
         with self._lock, self._connection:
             self._connection.execute(
-                "INSERT INTO knowledge_bases(id, name, created_at) VALUES (?, ?, ?)",
-                (record["id"], record["name"], record["created_at"]),
+                "INSERT INTO knowledge_bases(id, name, created_at, owner_id) VALUES (?, ?, ?, ?)",
+                (record["id"], record["name"], record["created_at"], owner_for_new_record()),
             )
         return record
 
@@ -150,8 +157,9 @@ class KnowledgeBaseService:
                 SELECT kb.id, kb.name, kb.created_at, COUNT(f.id) AS file_count,
                        COALESCE(SUM(f.chunk_count), 0) AS chunk_count
                 FROM knowledge_bases kb LEFT JOIN files f ON f.knowledge_base_id = kb.id
-                GROUP BY kb.id ORDER BY kb.created_at
+                WHERE kb.owner_id=? GROUP BY kb.id ORDER BY kb.created_at
                 """
+                , (owner_for_new_record(),)
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -159,7 +167,8 @@ class KnowledgeBaseService:
         """确认知识库存在，防止文件写入孤立空间。"""
         with self._lock:
             row = self._connection.execute(
-                "SELECT 1 FROM knowledge_bases WHERE id = ?", (knowledge_base_id,)
+                "SELECT 1 FROM knowledge_bases WHERE id = ? AND owner_id = ?",
+                (knowledge_base_id, owner_for_new_record())
             ).fetchone()
         if row is None:
             raise KeyError("知识库不存在")

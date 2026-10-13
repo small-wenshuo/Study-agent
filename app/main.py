@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -23,6 +23,7 @@ from app.services.sessions import SessionStore
 from app.services.memory import MemoryIndex, SummaryModel
 from app.papers.service import PaperService
 from app.papers.api import create_router, business_errors
+from app.auth import AuthMiddleware, AuthStore, COOKIE_NAME, SESSION_SECONDS, cookie_token
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -31,6 +32,7 @@ settings = Settings.from_env()
 data_dir = Path(settings.data_dir)
 if not data_dir.is_absolute():
     data_dir = (Path(__file__).resolve().parents[1] / data_dir).resolve()
+auth_store = AuthStore(data_dir / 'auth.db')
 memory_index = MemoryIndex(
     data_dir / "memory-chroma", OpenAICompatibleEmbeddings(settings), settings.memory_timeout_seconds,
 ) if not settings.missing_embedding_fields else None
@@ -95,9 +97,11 @@ async def lifespan(application):
     """关闭前中断论文任务，生命周期不触发自动生成。"""
     yield
     await papers.close()
+    auth_store.close()
 
 
 app = FastAPI(title="Study Agent", version="0.4.0", lifespan=lifespan)
+app.add_middleware(AuthMiddleware, store_getter=lambda: auth_store)
 papers = PaperService(
     settings, data_dir, lambda: sessions, lambda: knowledge_bases,
     OpenAICompatibleModel(settings) if settings.model_ready else None,
@@ -123,6 +127,55 @@ class ChatRequest(BaseModel):
         return value
 
 
+class LoginRequest(BaseModel):
+    """登录只接受账号和密码，绝不接受客户端自报的用户 ID。"""
+
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+@app.post('/api/auth/login')
+async def login(body: LoginRequest, request: Request, response: Response) -> dict:
+    """公网口令必须经过 HTTPS；开发机可在 loopback HTTP 登录。"""
+    from ipaddress import ip_address
+    try:
+        local_client = bool(request.client and ip_address(request.client.host).is_loopback)
+    except ValueError:
+        local_client = False
+    if request.url.scheme != 'https' and not (
+        request.url.hostname in {'127.0.0.1', 'localhost', '::1'} and local_client
+    ):
+        raise HTTPException(403, '请先为网站配置 HTTPS，再登录。')
+    origin = request.headers.get('origin')
+    if origin:
+        from urllib.parse import urlsplit
+        parsed_origin = urlsplit(origin)
+        if parsed_origin.scheme != request.url.scheme or parsed_origin.netloc.lower() != request.headers.get('host', '').lower():
+            raise HTTPException(403, '请求来源不匹配。')
+    result = await asyncio.to_thread(auth_store.authenticate, body.username, body.password)
+    if result is None:
+        raise HTTPException(401, '账号或密码错误，连续失败会暂时锁定账号。')
+    user, token = result
+    response.set_cookie(COOKIE_NAME, token, max_age=SESSION_SECONDS,
+                        httponly=True, secure=request.url.scheme == 'https', samesite='strict', path='/')
+    response.headers['Cache-Control'] = 'no-store'
+    return user
+
+
+@app.get('/api/auth/me')
+async def authenticated_user(request: Request) -> dict:
+    """返回当前登录身份以便页面选择各自的本地会话记忆键。"""
+    return request.state.auth_user
+
+
+@app.post('/api/auth/logout')
+async def logout(request: Request, response: Response) -> dict:
+    """服务器吊销令牌，再清理浏览器 Cookie。"""
+    auth_store.revoke(cookie_token(request.scope))
+    response.delete_cookie(COOKIE_NAME, path='/', samesite='strict')
+    response.headers['Cache-Control'] = 'no-store'
+    return {'ok': True}
+
 class KnowledgeBaseCreate(BaseModel):
     """定义创建知识库所需名称。"""
 
@@ -140,7 +193,7 @@ class KnowledgeBaseCreate(BaseModel):
 @app.get("/")
 async def index() -> FileResponse:
     """返回无需构建步骤的聊天网页。"""
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers={'Cache-Control': 'no-store'})
 
 
 @app.get("/paper.js")
@@ -326,6 +379,11 @@ async def chat(request: ChatRequest) -> StreamingResponse:
     """启动聊天任务并以 SSE 返回进度、回答、错误和结束事件。"""
     if sessions.get(request.session_id) is None:
         raise HTTPException(404, detail="会话不存在，请新建会话")
+    if request.knowledge_base_id:
+        try:
+            _require_knowledge_bases()._require_knowledge_base(request.knowledge_base_id)
+        except KeyError as exc:
+            raise HTTPException(404, detail='知识库不存在。') from exc
     # 模式开启时只处理本次论文追问，默认关闭完全保留旧问答路径。
     mode = sessions.detail(request.session_id, limit=1)
     if mode['paper_mode']:

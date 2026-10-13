@@ -100,3 +100,22 @@ D:/codex/.env/new_agent/python.exe evals/run_paper_acceptance.py
 ```
 
 首期不支持扫描件 OCR、PDF 框选、高保真公式/图表恢复或多篇比较。引用身份与摘录校验不等于事实正确性；真实模型和关键实验值仍需人工核验。实现与验证范围见 [V4 验收记录](docs/v4-validation.md)，详细规格见 [V4 技术设计](.scratch/study-agent-v4/technical-design.md)。
+
+## 多用户访问与服务器升级（2026-10-13）
+
+网站现在必须先登录。管理员在**运行服务的服务器**终端创建账号；网页不提供公开注册。首次创建管理员的内部 ID 固定为 `legacy-admin`，升级前的聊天记录、长期记忆、知识库及其论文资料只归这个账号。其他账号各自拥有独立数据，即使知道别人的会话、文件或笔记 ID 也无法读取。
+
+升级前先暂停公开访问并备份完整 `DATA_DIR`（包括 SQLite、Chroma、上传文件和导出文件）；确保服务已经停止后更新代码。沿用原 `DATA_DIR`，不要删除或重新创建原数据目录。在项目根目录用**服务所用的同一个 Python 环境**执行：
+
+```bash
+python -m scripts.create_user admin --admin
+python -m scripts.create_user alice
+# 忘记密码：会同时吊销该账号的全部旧登录
+python -m scripts.create_user alice --reset
+```
+
+命令会在终端无回显地询问两次密码（至少 12 字符），不要把密码放在命令行、配置文件或聊天里。本地开发若使用项目约定环境，把上述 `python` 换为 `D:/codex/.env/new_agent/python.exe`。账号信息保存在 `DATA_DIR/auth.db`，也须备份；丢失它不会自动恢复账号与归属映射。第一次启动会给旧业务表添加归属列，建议在备份后先于维护窗口验证，再开放访问。请保持**单 worker** 运行。
+
+**公网必须先配置 HTTPS。** 明文公网 HTTP 登录会返回 403；反向代理需把可信的 HTTPS 请求协议传给 ASGI 服务，并禁止外部客户端伪造转发头。浏览器 Cookie 设置为 HttpOnly、SameSite=Strict，HTTPS 时加 Secure；服务器端登录令牌可吊销，七天过期，连续五次错误会锁定账号十五分钟。站点仍通过明文 HTTP 暴露时，先在防火墙或反向代理关闭公网入口，完成 HTTPS 和升级后再开放。升级后分别用管理员和普通账号验证：管理员看得到旧数据，普通账号只看得到自己的数据；退出后刷新页面应回到登录页。
+
+本次代码与隔离验证见 [多用户隔离验收](docs/auth-isolation-validation.md)。

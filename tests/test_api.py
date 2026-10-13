@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
+import app.main as main_module
 
 import httpx
 
 from app.main import app
+from tests.auth_support import install_auth, login_admin
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
@@ -12,12 +16,18 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         """为每个测试创建进程内 ASGI 客户端。"""
+        self.temp = tempfile.TemporaryDirectory()
+        self.auth_store, self.auth_patch = install_auth(main_module, Path(self.temp.name))
         self.transport = httpx.ASGITransport(app=app)
-        self.client = httpx.AsyncClient(transport=self.transport, base_url="http://test")
+        self.client = httpx.AsyncClient(transport=self.transport, base_url="https://test")
+        await login_admin(self.client)
 
     async def asyncTearDown(self):
         """测试结束后关闭 HTTP 客户端。"""
         await self.client.aclose()
+        self.auth_patch.stop()
+        self.auth_store.close()
+        self.temp.cleanup()
 
     async def test_health_never_exposes_secrets(self):
         """健康接口只能暴露就绪状态和缺失字段名。"""
