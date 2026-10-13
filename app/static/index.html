@@ -68,6 +68,12 @@
       let response=await fetch('/api/auth/me',{cache:'no-store'});
       if(response.ok){user=await response.json();showApp();return user}
       screen.hidden=false;
+      // 公网明文页面不收集密码；服务端也会拒绝此类登录请求。
+      if(location.protocol!=='https:'&&!['localhost','127.0.0.1','::1','[::1]'].includes(location.hostname)){
+        document.querySelector('#auth-error').textContent='此网站尚未启用 HTTPS。请管理员先配置 HTTPS，再输入账号密码。';
+        form.querySelector('button').disabled=true;
+        return new Promise(()=>{});
+      }
       return new Promise(resolve=>{form.onsubmit=async event=>{
         event.preventDefault();const error=document.querySelector('#auth-error'),button=form.querySelector('button');
         button.disabled=true;error.textContent='';
